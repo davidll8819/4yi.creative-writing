@@ -1,0 +1,15 @@
+{
+  "name": "museforge-novel-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI 小说写作、项目管理与章节分镜工作台",
+  "scripts": {
+    "dev": "node server.mjs",
+    "start": "node server.mjs",
+    "check": "node --check server.mjs && node --check public/app.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
