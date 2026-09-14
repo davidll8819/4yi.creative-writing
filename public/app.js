@@ -85,6 +85,27 @@ const STYLE_MODULE_GROUPS = [
   ] }
 ];
 
+const STYLE_RULE_TEMPLATES = {
+  "human-voice": "用具体动作和可观察的细节呈现情绪，删去替读者总结感受的句子；保留人物自身的语气与犹豫。",
+  "filter-words": "检查重复的抽象形容词、套话和相同句式；优先改成符合场景的动作、对白或物件细节。",
+  sensory: "每个重要场景选择一两种与情节有关的感官线索，让环境参与冲突，避免堆砌形容。",
+  "sentence-rhythm": "动作紧迫时用短句推进，思考与余波时允许长句；同一段中避免机械地重复一种句长。",
+  "dialogue-progress": "对白每轮都应改变信息、关系或行动；人物情绪随对话逐层变化，不让角色轮流解释设定。",
+  subtext: "重要对白保留言外之意；人物可以回避问题、改变话题或用行动暴露真实意图。",
+  "voice-print": "给主要人物保持稳定的用词、语速和关注点，使读者不用看称谓也能辨认说话者。",
+  "scene-four-step": "每个关键场景明确目标、阻力、行动和结果；结果要改变下一场的处境。",
+  tension: "冲突逐步加码，胜利也要带来新代价；不要让连续场景都停留在同一种压力水平。",
+  conflict: "让人物目标互相抵触，反转应由既有选择和信息推动，而非凭空增加新规则。",
+  reversal: "反转前埋下可回看的证据，反转后改变人物行动，避免只揭示信息而不产生后果。",
+  "chapter-hook": "章末留下具体未解决的危险、证据或选择，并与下一章开场形成因果连接。",
+  "character-arc": "主要人物有可追踪的欲望、弱点与关系变化；行为应符合已确认的人设和当前处境。",
+  "power-limit": "能力必须遵守已写明的触发条件、代价和上限；升级要同时产生新的限制或冲突。",
+  foreshadow: "记录本章新增与回收的伏笔，兑现时尊重前文信息，不用临时设定替代回收。",
+  "task-audit": "成稿后逐项核对本章任务卡中的目标、必须事件和禁区，指出缺漏及对应段落。",
+  "logic-audit": "核对人物位置、时间顺序、已知信息和能力边界；有冲突时明确指出依据。",
+  "repeat-audit": "检查重复解释、重复情绪描写和同义反复，保留推进剧情所需的信息。"
+};
+
 const STORYBOARD_STYLE_GUIDES = {
   "手绘电影风": { temp: "暖/冷", family: "通用", prompt: "hand drawn cinematic storyboard, pencil line art, rough director thumbnails, clear action arrows, camera notes, strong film composition, readable blocking" },
   "国风水墨": { temp: "冷/暗", family: "国风", prompt: "Chinese ink wash illustration, xuan paper texture, flowing brush strokes, restrained dark cool palette, poetic negative space, oriental cinematic composition" },
@@ -168,11 +189,18 @@ const state = {
   assetFocusId: null,
   assetSearch: "",
   entityTab: "all",
+  entityListTab: "all",
   memoryTab: "all",
   storyboardTab: "shots",
   modal: null,
+  bookSearch: "",
+  styleDraft: null,
+  styleDraftProjectId: null,
   wizardStep: 1,
   wizard: {},
+  bookSetupCoverSerial: 0,
+  bookIdea: { genre: "", style: "", genreValues: [], styleValues: [], genreOther: "", styleOther: "", premise: "", options: [], selected: -1, demo: false, premiseSerial: 0, premiseDemo: false },
+  bookIdeaProgress: { kind: "", index: 0 },
   aiDraftConfig: { words: 1500, direction: "强冲突推进", note: "" },
   outlineExpand: { actCount: 3, chaptersPerAct: 5 },
   pendingAssets: [],
@@ -190,6 +218,7 @@ const state = {
   quickExpanded: {},
   entitySearch: "",
   entityFocusId: null,
+  entityFolderFilter: null,
   projects: loadProjects(),
   trash: loadTrash()
 };
@@ -224,6 +253,7 @@ function normalizeProject(item) {
   const sourceChapters = item.chapters?.length ? item.chapters : [{ id: uid(), title: "第一章 未命名", content: "", status: "待写", summary: "", updatedAt: Date.now() }];
   const chapters = sourceChapters.map((chapter, index) => ({
     ...chapter,
+    fineOutline: chapter.fineOutline || "",
     taskCard: { ...defaultTask(), ...(chapter.taskCard || {}) },
     qualityReport: chapter.qualityReport || null,
     scenes: (chapter.scenes || []).map((scene, sceneIndex) => normalizeScene(scene, sceneIndex)),
@@ -254,13 +284,35 @@ function normalizeProject(item) {
     bible,
     assets,
     entities,
+    entityFolders: Array.isArray(item.entityFolders) ? item.entityFolders : [],
     memories,
+    inspirationNotes: Array.isArray(item.inspirationNotes) ? item.inspirationNotes : [],
+    styleProfile: normalizeStyleProfile(item),
     volumes,
     chapters,
     storyboards: item.storyboards || (item.shots?.length && item.chapters?.[0]?.id ? { [item.chapters[0].id]: item.shots } : {}),
     storyboardAssets: item.storyboardAssets || {},
     storyboardConfig: item.storyboardConfig || {},
     storyboardStyle: normalizeStoryboardStyle(item.storyboardStyle)
+  };
+}
+
+function normalizeStyleProfile(item) {
+  const pack = stylePackById(item.genesis?.stylePack);
+  const defaults = ["human-voice", "filter-words", "dialogue-progress", "scene-four-step", "tension", "chapter-hook", "task-audit", "logic-audit"];
+  const selected = item.genesis?.styleModules || defaults;
+  const existing = item.styleProfile;
+  return {
+    name: existing?.name || pack.name,
+    desc: existing?.desc ?? pack.desc,
+    rules: Array.isArray(existing?.rules) ? existing.rules.map((rule) => ({
+      id: rule.id || uid(), groupId: rule.groupId || "voice", title: rule.title || "未命名规则",
+      content: rule.content || "", source: rule.source === "template" ? "template" : "custom",
+      templateId: rule.templateId || "", policy: ["force", "auto", "ignore"].includes(rule.policy) ? rule.policy : "force"
+    })) : STYLE_MODULE_GROUPS.flatMap((group) => group.modules.filter(([id]) => selected.includes(id)).map(([id, name]) => ({
+      id: uid(), groupId: group.id, title: name, content: STYLE_RULE_TEMPLATES[id] || "",
+      source: "template", templateId: id, policy: "force"
+    })))
   };
 }
 
@@ -384,6 +436,13 @@ function normalizeEntity(entity = {}) {
     type: entity.type || "character",
     name: entity.name || "未命名设定",
     summary: entity.summary || entity.desc || "",
+    content: entity.content || "",
+    role: entity.role || "ordinary",
+    scope: entity.scope || "manual",
+    keyFacts: Array.isArray(entity.keyFacts) ? entity.keyFacts : [],
+    attributes: Array.isArray(entity.attributes) ? entity.attributes : [],
+    folderId: entity.folderId || null,
+    volumeId: entity.volumeId || null,
     status: entity.status || "draft",
     aliases: entity.aliases || [],
     relations: entity.relations || [],
@@ -484,9 +543,11 @@ function nav() {
   const p = project();
   const projectItems = [
     ["outline", "◫", "大纲"],
-    ["drafting", "✎", "初写"],
+    ["drafting", "✎", "初稿"],
     ["encyclopedia", "◉", "设定百科"],
     ["bible", "◎", "动态记忆"],
+    ["style", "✦", "作品风格"],
+    ["inspiration", "✧", "灵感墙"],
     ["finalize", "✓", "定稿"],
     ["assets", "◇", "资产"],
     ["storyboard", "▤", "分镜"]
@@ -498,6 +559,7 @@ function nav() {
       <button class="nav-btn ${state.view === "quick" ? "active" : ""}" data-view="quick">快速创作</button>
       <button class="nav-btn" data-action="new-project">创建新故事</button>
       ${p ? `<div class="project-scope"><span class="scope-divider"></span><span class="scope-name" title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</span>
+        <button class="nav-btn" data-action="open-book-search"><span class="nav-icon">⌕</span>搜索本书 <small>⌘K</small></button>
         ${projectItems.map(([id, icon, label]) => `<button class="nav-btn ${(state.view === id || (id === "drafting" && state.view === "writing")) ? "active" : ""}" data-view="${id}"><span class="nav-icon">${icon}</span>${label}</button>`).join("")}
       </div>` : ""}
       <div class="sidebar-foot">
@@ -521,44 +583,58 @@ function topbar() {
 }
 
 const listValue = (value) => Array.isArray(value) ? value.join("\n") : value || "";
+const ENTITY_TYPES = [["collection","集合"],["character","角色"],["location","地点"],["faction","势力"],["prop","物品"],["skill","功法"],["rule","规则"],["background","背景"]];
+const ENTITY_TYPE_LABELS = Object.fromEntries(ENTITY_TYPES);
+const ENTITY_SCOPE_LABELS = { manual:"仅手动引用", global:"全书长期生效", volume:"绑定卷宗", off:"不要自动带入" };
+function entityArticle(content) {
+  return (content || "").split(/\n/).map((line) => {
+    const safe = escapeHtml(line.trim());
+    if (!safe) return "<div class=\"entity-article-gap\"></div>";
+    if (/^#{1,3}\s/.test(line)) return `<h3>${safe.replace(/^#{1,3}\s*/, "")}</h3>`;
+    if (/^【.+】$/.test(line.trim())) return `<h3>${safe}</h3>`;
+    if (/^[-*•]\s/.test(line)) return `<p class="entity-bullet">• ${safe.replace(/^[-*•]\s*/, "")}</p>`;
+    return `<p>${safe}</p>`;
+  }).join("");
+}
 function encyclopediaView() {
   const p = project();
-  const tabs = [["all","全部"],["character","人物"],["location","地点"],["faction","势力"],["prop","道具"],["rule","规则"]];
-  const labels = { character: "人物", location: "地点", faction: "势力", prop: "道具", rule: "规则" };
   const query = (state.entitySearch || "").trim();
-  const filtered = p.entities.filter((entity) =>
-    (state.entityTab === "all" || entity.type === state.entityTab)
-    && (!query || `${entity.name} ${entity.summary} ${entity.aliases.join(" ")}`.toLowerCase().includes(query.toLowerCase()))
-  );
+  const filtered = p.entities.filter((entity) => {
+    const listMatch = state.entityListTab === "todo" ? entity.status !== "confirmed" : state.entityListTab === "core" ? entity.role === "lead" || entity.scope === "global" : true;
+    return listMatch && (state.entityTab === "all" || entity.type === state.entityTab)
+      && (!state.entityFolderFilter || entity.folderId === state.entityFolderFilter)
+      && (!query || `${entity.name} ${entity.summary} ${entity.content} ${entity.aliases.join(" ")} ${entity.keyFacts.join(" ")}`.toLowerCase().includes(query.toLowerCase()));
+  });
   const focused = filtered.find((entity) => entity.id === state.entityFocusId) || filtered[0] || null;
   const first = focused ? p.chapters.find((c)=>c.id===focused.firstChapterId) : null;
   const visual = focused ? p.assets.find((asset)=>asset.id===focused.visualAssetId) : null;
-  const groups = tabs.filter(([id]) => id !== "all").map(([id, label]) => [id, label, p.entities.filter((entity) => entity.type === id)]);
+  const folders = p.entityFolders || [];
   const outputReady = p.chapters.some((chapter) => chapter.status === "已完成");
-  return `<div class="page-head"><div><p class="eyebrow">STORY ENCYCLOPEDIA</p><h1>设定百科</h1><p class="subtext">静态设定只保存“它是谁、是什么”；角色当前状态与剧情变化交给动态记忆。</p></div><div class="head-actions"><button class="btn" data-action="sync-assets-entities">同步视觉资产</button><button class="btn primary" data-action="new-entity">＋ 新建设定</button></div></div>
+  return `<div class="page-head"><div><p class="eyebrow">STORY ENCYCLOPEDIA</p><h1>设定百科</h1><p class="subtext">为人物、地点与世界规则建立可检索的完整档案，并控制它们何时进入创作上下文。</p></div><div class="head-actions"><button class="btn" data-action="sync-assets-entities">同步视觉资产</button><button class="btn" data-action="new-entity-folder">＋ 新建分组</button><button class="btn primary" data-action="new-entity">＋ 新建设定</button></div></div>
     <section class="entity-overview">
       <div><strong>${p.entities.length}</strong><span>设定实体</span></div><div><strong>${p.entities.filter((x)=>x.status==="confirmed").length}</strong><span>已确认</span></div><div><strong>${p.entities.filter((x)=>x.visualAssetId).length}</strong><span>已关联视觉资产</span></div><div><strong>${p.entities.reduce((n,x)=>n+x.relations.length,0)}</strong><span>关系记录</span></div>
     </section>
     <div class="entity-workspace">
       <aside class="panel entity-tree-panel">
-        <div class="panel-head"><h3>万物百科</h3><span class="tag">有效 ${filtered.length}</span></div>
+        <div class="panel-head"><h3>万物百科</h3><span class="tag">有效 ${p.entities.filter(x=>x.status==="confirmed").length}</span></div>
         <div class="entity-tree-body">
+          <div class="entity-list-tabs">${[["todo","待办"],["core","核心"],["all","全部"],["graph","图谱"]].map(([id,label])=>`<button data-entity-list-tab="${id}" class="${state.entityListTab===id?"active":""}">${label}</button>`).join("")}</div>
           <input class="entity-search" data-entity-search value="${escapeHtml(state.entitySearch || "")}" placeholder="搜索设定、角色、地点……" />
-          <div class="entity-filter-pills">${tabs.map(([id,label]) => `<button class="${state.entityTab===id?"active":""}" data-entity-tab="${id}">${label}<small>${id==="all"?p.entities.length:p.entities.filter((x)=>x.type===id).length}</small></button>`).join("")}</div>
-          <div class="entity-tree-groups">${groups.map(([id,label,items]) => `<details class="entity-tree-group" ${state.entityTab === "all" || state.entityTab === id ? "open" : ""}>
-            <summary><span>${escapeHtml(label)}</span><small>${items.length}</small></summary>
-            ${items.filter((entity) => filtered.includes(entity)).map((entity) => `<button class="entity-tree-node ${focused?.id === entity.id ? "active" : ""}" data-entity-focus="${entity.id}"><span class="entity-symbol ${entity.type}">${escapeHtml(entity.name.slice(0,1))}</span><strong>${escapeHtml(entity.name)}</strong><i>${entity.status==="confirmed"?"已确认":"草稿"}</i></button>`).join("") || `<div class="entity-tree-empty">当前分类无匹配设定</div>`}
-          </details>`).join("")}</div>
+          <div class="entity-filter-pills">${[["all","全部"],...ENTITY_TYPES].map(([id,label]) => `<button class="${state.entityTab===id?"active":""}" data-entity-tab="${id}">${label}</button>`).join("")}</div>
+          <div class="entity-folder-list"><button class="${!state.entityFolderFilter?"active":""}" data-entity-folder="">全部分组</button>${folders.map(folder=>`<button class="${state.entityFolderFilter===folder.id?"active":""}" data-entity-folder="${folder.id}">📁 ${escapeHtml(folder.name)} <small>${p.entities.filter(x=>x.folderId===folder.id).length}</small></button>`).join("")}</div>
+          ${state.entityFolderFilter ? `<div class="entity-folder-actions"><button data-action="rename-entity-folder">重命名分组</button><button data-action="delete-entity-folder">删除分组</button></div>` : ""}
+          <div class="entity-tree-groups">${filtered.map((entity) => `<button class="entity-tree-node ${focused?.id === entity.id ? "active" : ""}" data-entity-focus="${entity.id}"><span class="entity-symbol ${entity.type}">${escapeHtml(entity.name.slice(0,1))}</span><strong>${escapeHtml(entity.name)}</strong><i>${escapeHtml(ENTITY_TYPE_LABELS[entity.type]||"设定")}</i></button>`).join("") || `<div class="entity-tree-empty">当前筛选下没有设定</div>`}</div>
         </div>
       </aside>
       <section class="panel entity-detail-panel">
-        ${focused ? `<div class="entity-detail-head">
+        ${state.entityListTab === "graph" ? `<div class="entity-graph"><h2>设定关系图谱</h2><p>点击任一设定查看详情；有关系记录的设定会展示关联线索。</p><div class="entity-graph-cards">${filtered.map(entity=>`<button data-entity-focus="${entity.id}" class="${focused?.id===entity.id?"active":""}"><strong>${escapeHtml(entity.name)}</strong><small>${escapeHtml(ENTITY_TYPE_LABELS[entity.type]||"设定")}</small><span>${escapeHtml(entity.relations.join(" · ")||"暂无关系")}</span></button>`).join("") || "暂无设定"}</div></div>` : focused ? `<div class="entity-detail-head">
           <span class="entity-symbol ${focused.type}">${escapeHtml(focused.name.slice(0,1))}</span>
-          <div><p class="eyebrow">${escapeHtml(labels[focused.type] || "设定")} · ${focused.status==="confirmed"?"已确认":"草稿"}</p><h2>${escapeHtml(focused.name)}</h2><p>${escapeHtml(focused.summary || "等待补充设定内容。")}</p></div>
+          <div><p class="eyebrow">${escapeHtml(ENTITY_TYPE_LABELS[focused.type] || "设定")} · ${focused.status==="confirmed"?"已确认":"待完善"}</p><h2>${escapeHtml(focused.name)}</h2><p>${escapeHtml(focused.summary || "等待补充设定内容。")}</p><div class="entity-tags"><span>${focused.status==="confirmed"?"● 已确认":"○ 待确认"}</span><span>${escapeHtml(ENTITY_SCOPE_LABELS[focused.scope]||"仅手动引用")}</span>${focused.role==="lead"?"<span>主角</span>":""}</div></div>
         </div>
         <div class="entity-detail-actions">
           ${["character","location","prop"].includes(focused.type) ? `<button class="btn primary" ${outputReady ? `data-action="entity-asset-prompt" data-entity-id="${focused.id}"` : "disabled"}>${outputReady ? visual?.imageUrl ? "查看定妆图" : visual ? "生成定妆提示词" : "创建定妆资产" : "定稿后解锁定妆"}</button>` : ""}
           <button class="btn" data-action="edit-entity" data-entity-id="${focused.id}">编辑设定</button>
+          <button class="btn ghost" data-action="delete-entity" data-entity-id="${focused.id}">删除</button>
         </div>
         <div class="entity-detail-grid">
           <div><span>别名</span><strong>${escapeHtml(focused.aliases.join("、") || "无")}</strong></div>
@@ -566,7 +642,9 @@ function encyclopediaView() {
           <div><span>视觉资产</span><strong>${visual ? escapeHtml(visual.name) : "未关联"}</strong></div>
           <div><span>关系记录</span><strong>${focused.relations.length} 条</strong></div>
         </div>
-        <section class="entity-detail-section"><h3>关系与备注</h3>${focused.relations.length ? focused.relations.map((item)=>`<p>${escapeHtml(item)}</p>`).join("") : `<p class="subtext">还没有关系记录。</p>`}</section>`
+        <section class="entity-detail-section"><h3>关键事实</h3>${focused.keyFacts.length ? focused.keyFacts.map((item)=>`<p>• ${escapeHtml(item)}</p>`).join("") : `<p class="subtext">还没有关键事实。</p>`}</section>
+        <section class="entity-detail-section entity-article"><h3>详细档案</h3>${focused.content ? entityArticle(focused.content) : `<p class="subtext">还没有详细档案。点击“编辑设定”，可添加分章节的完整介绍。</p>`}</section>
+        <section class="entity-detail-section"><h3>属性与关系</h3>${focused.attributes.map((item)=>`<p>${escapeHtml(item)}</p>`).join("")}${focused.relations.length ? focused.relations.map((item)=>`<p>${escapeHtml(item)}</p>`).join("") : `<p class="subtext">还没有关系记录。</p>`}</section>`
         : `<div class="empty">当前分类还没有设定实体。</div>`}
       </section>
     </div>`;
@@ -606,6 +684,44 @@ function bibleView() {
     </div></section>`;
 }
 
+function styleDraft() {
+  const p = project();
+  if (state.styleDraftProjectId !== p.id || !state.styleDraft) {
+    state.styleDraft = structuredClone(p.styleProfile);
+    state.styleDraftProjectId = p.id;
+  }
+  return state.styleDraft;
+}
+
+function styleView() {
+  const profile = styleDraft();
+  const active = profile.rules.filter((rule) => rule.policy !== "ignore" && rule.content.trim()).length;
+  return `<div class="page-head"><div><p class="eyebrow">STORY STYLE</p><h1>作品风格包</h1><p class="subtext">按写作环节整理规则。保存后，规则内容会进入本书的 AI 写作与质量检查提示词。</p></div><div class="head-actions"><button class="btn" data-action="cancel-style">放弃修改</button><button class="btn primary" data-action="save-style">保存风格包</button></div></div>
+    <section class="panel style-profile-intro"><div class="panel-body"><div class="style-profile-fields"><label>风格包名称<input data-style-profile-field="name" value="${escapeHtml(profile.name)}" maxlength="80" /></label><label>说明<input data-style-profile-field="desc" value="${escapeHtml(profile.desc)}" maxlength="240" /></label></div><p>当前有 ${profile.rules.length} 条规则，其中 ${active} 条参与 AI。强制：每次都读；按需：仅在相关任务中读；忽略：不发送给 AI。</p></div></section>
+    <div class="style-editor-groups">${STYLE_MODULE_GROUPS.map((group) => {
+      const rules = profile.rules.filter((rule) => rule.groupId === group.id);
+      return `<section class="panel style-editor-group"><div class="panel-head"><div><h2>${group.name}</h2><p>${group.desc}</p></div><span class="tag">${rules.length} 条</span></div><div class="panel-body">
+        ${rules.map((rule) => {
+          const templates = group.modules;
+          return `<article class="style-rule-card" data-style-rule-card="${escapeHtml(rule.id)}"><div class="style-rule-heading"><input data-style-rule-field="title" data-style-rule-id="${escapeHtml(rule.id)}" aria-label="规则名称" value="${escapeHtml(rule.title)}" maxlength="80" /><button class="btn small ghost" data-action="remove-style-rule" data-style-rule-id="${escapeHtml(rule.id)}">移除</button></div>
+            <div class="style-rule-controls"><div class="style-rule-source"><button class="${rule.source === "custom" ? "active" : ""}" data-style-rule-source="custom" data-style-rule-id="${escapeHtml(rule.id)}">自定义</button><button class="${rule.source === "template" ? "active" : ""}" data-style-rule-source="template" data-style-rule-id="${escapeHtml(rule.id)}">用模板</button></div>
+              <select data-style-rule-policy="${escapeHtml(rule.id)}" aria-label="${escapeHtml(rule.title)}引用策略"><option value="force" ${rule.policy === "force" ? "selected" : ""}>强制</option><option value="auto" ${rule.policy === "auto" ? "selected" : ""}>按需</option><option value="ignore" ${rule.policy === "ignore" ? "selected" : ""}>忽略</option></select></div>
+            ${rule.source === "template" ? `<select data-style-rule-template="${escapeHtml(rule.id)}" aria-label="选择规则模板">${templates.map(([id, name]) => `<option value="${id}" ${rule.templateId === id ? "selected" : ""}>${name}</option>`).join("")}</select>` : ""}
+            <textarea data-style-rule-field="content" data-style-rule-id="${escapeHtml(rule.id)}" aria-label="${escapeHtml(rule.title)}的规则内容" ${rule.source === "template" ? "readonly" : ""} placeholder="写清楚 AI 应遵守的具体要求…">${escapeHtml(rule.content)}</textarea></article>`;
+        }).join("") || `<p class="style-rule-empty">这里还没有规则，可以从模板开始，也可以自己写。</p>`}
+        <button class="btn small" data-action="add-style-rule" data-style-group-id="${group.id}">＋ 添加规则</button>
+      </div></section>`;
+    }).join("")}</div>`;
+}
+
+function inspirationView() {
+  const p = project();
+  const notes = [...(p.inspirationNotes || [])].sort((a, b) => b.createdAt - a.createdAt);
+  return `<div class="page-head"><div><p class="eyebrow">IDEA WALL</p><h1>灵感墙</h1><p class="subtext">随手记下对白、画面或情节。需要时可以一键放进当前章节任务。</p></div><span class="tag">${notes.length} 条灵感</span></div>
+    <section class="panel idea-composer"><div class="panel-body"><label for="ideaInput">此刻想到什么？</label><textarea id="ideaInput" placeholder="例如：主角第一次发现账簿会篡改别人的记忆……"></textarea><div class="idea-composer-actions"><span>仅保存在这本作品中</span><button class="btn primary" data-action="add-inspiration">记下灵感</button></div></div></section>
+    <section class="idea-list">${notes.length ? notes.map((note) => `<article class="panel idea-card"><div class="panel-body"><p>${escapeHtml(note.text)}</p><div class="idea-card-foot"><time>${new Date(note.createdAt).toLocaleString("zh-CN")}</time><button class="btn small" data-action="use-inspiration" data-idea-id="${escapeHtml(note.id)}">放进当前章节任务 →</button></div></div></article>`).join("") : `<div class="panel empty">还没有灵感。在上方写下第一条，随时回来继续整理。</div>`}</section>`;
+}
+
 function projectsView() {
   const totalWords = state.projects.reduce((sum, p) => sum + p.chapters.reduce((n, c) => n + countText(c.content), 0), 0);
   const chapters = state.projects.reduce((sum, p) => sum + p.chapters.length, 0);
@@ -620,30 +736,30 @@ function projectsView() {
         <button class="home-entry-card primary" data-view="quick">
           <span>01</span>
           <h2>快速创作</h2>
-          <p>按固定模板或自定义标签，一步步生成灵感、走向、章节、细纲和正文，适合快速开新文。</p>
-          <b>立即开始 →</b>
+          <p>已有大致题材，想先试写？从灵感一路生成到正文，完成后可保存为项目继续修改。</p>
+          <b>试写一个故事 →</b>
         </button>
         <button class="home-entry-card" data-action="new-project">
           <span>02</span>
           <h2>创建新故事</h2>
-          <p>用“定风、定魂、创世、布局、开书”建立长期小说骨架，适合认真连载的大项目。</p>
-          <b>五步建书 →</b>
+          <p>输入题材、风格和核心脑洞，比较三种立书方向，再完善人物、世界与章节。</p>
+          <b>推演新书方向 →</b>
         </button>
         <button class="home-entry-card" data-view="projects">
           <span>03</span>
           <h2>项目中心</h2>
-          <p>继续已有作品，管理章节、设定百科、动态记忆、视觉资产、分镜和故事板输出。</p>
-          <b>查看作品 →</b>
+          <p>已有作品从这里继续。打开最近章节，也能管理设定、资产和分镜。</p>
+          <b>继续已有作品 →</b>
         </button>
       </div>
       <aside class="home-assistant-panel">
         <p class="eyebrow">4YI ASSISTANT</p>
         <h2>创作助手</h2>
-        <p>新项目先用快速创作试方向，确定能写下去后，再进入五步建书沉淀长期设定。</p>
+        <p>按当前目标选择入口。试写可以快速落笔；新书推演先比较方向，再进入五步建书。</p>
         <div class="assistant-flow">
-          <div><span>1</span><strong>先试爽点</strong><small>快速生成灵感和走向</small></div>
-          <div><span>2</span><strong>再定长篇</strong><small>补齐世界、人物和章节结构</small></div>
-          <div><span>3</span><strong>最后可视化</strong><small>定妆资产统一分镜画风</small></div>
+          <div><span>1</span><strong>选择起点</strong><small>试写方向，或直接建立长篇项目</small></div>
+          <div><span>2</span><strong>继续写作</strong><small>在项目中完善章节与设定</small></div>
+          <div><span>3</span><strong>制作分镜</strong><small>正文稳定后再整理视觉资产</small></div>
         </div>
         <div class="assistant-actions">
           <button class="btn primary" data-view="quick">快速创作</button>
@@ -676,8 +792,16 @@ function projectsView() {
             <div class="progress"><i style="width:${Math.min(p.progress || 0, 100)}%"></i></div>
             <div class="meta-line"><span>${p.chapters.length} 章 · ${p.chapters.reduce((n,c)=>n+countText(c.content),0).toLocaleString()} 字</span><span>${p.progress || 0}%</span></div>
           </div>
+          <div class="project-next"><span>下一步：${escapeHtml(projectNextStep(p).label)}</span><b>继续 →</b></div>
         </article>`).join("")}
     </section>`;
+}
+
+function projectNextStep(p) {
+  if (!p.outline || !p.outline.locked) return { view: "outline", chapterId: p.chapters[0]?.id, label: p.outline ? "确认大纲" : "建立故事大纲" };
+  const current = p.chapters.find((item) => item.status !== "已完成") || p.chapters.at(-1);
+  if (!current) return { view: "drafting", chapterId: null, label: "开始第一章" };
+  return { view: ["初稿完成", "初写完成", "快写初稿"].includes(current.status) ? "finalize" : "drafting", chapterId: current.id, label: `${current.title} · ${current.status === "待写" ? "开始初稿" : "继续完善"}` };
 }
 
 function genesisArchive(p) {
@@ -694,7 +818,7 @@ function genesisArchive(p) {
   ];
   const activePack = stylePackById(p.genesis?.stylePack);
   return `<section class="genesis-archive">
-    <div class="section-title"><div><p class="eyebrow">STORY SOUL FILE</p><h2>大纲生成依据 · 创世核心档案</h2><p>${escapeHtml(activePack.name)} · ${(p.genesis?.styleModules || []).length} 个AI规则模块正在约束后续创作</p></div><button class="btn" data-action="generate-project-soul">✦ 根据现有大纲重整</button></div>
+    <div class="section-title"><div><p class="eyebrow">STORY SOUL FILE</p><h2>大纲生成依据 · 创世核心档案</h2><p>${escapeHtml(p.styleProfile?.name || activePack.name)} · ${(p.styleProfile?.rules || []).filter((rule) => rule.policy !== "ignore").length} 条风格规则参与创作</p></div><button class="btn" data-action="generate-project-soul">✦ 根据现有大纲重整</button></div>
     <div class="genesis-card-grid">${defs.map(([id,title,color])=>`<article class="genesis-result-card ${color}"><div><h3>${title}</h3><span>AI</span></div>${p.outline?.locked ? `<p>${escapeHtml(cards[id] || "")}</p>` : `<textarea data-genesis-card="${id}">${escapeHtml(cards[id] || "")}</textarea>`}</article>`).join("")}</div>
     <div class="soul-tags"><strong>风格标签</strong>${[...(p.genre||[]),p.tone,activePack.name].filter(Boolean).map((tag)=>`<span>${escapeHtml(tag)}</span>`).join("")}</div>
   </section>`;
@@ -753,8 +877,30 @@ function outlineView() {
         <div class="section-title"><div><p class="eyebrow">CHAPTER-BASED ASSETS</p><h2>定妆资产从正文里提取</h2></div><button class="btn" data-view="assets">查看资产库 →</button></div>
         <div class="notice">新建大纲不会预塞主角、配角、场景或道具。每一集正文完成后，系统会按本集新出现的人物、场景、关键道具进行 AI 提取，再由你人工确认加入资产库。</div>
       </section>
-      <div class="next-step-card"><div><p class="eyebrow">NEXT STEP</p><h2>${outline.locked ? "大纲与分集标题已经锁定" : "请先确认每一集的标题"}</h2><p>${outline.locked ? "初写时 AI 将读取这份大纲和分集规划，但作者仍可继续修改正文。" : "你可以直接修改上方分集标题，确认后再进入初写。"}</p></div><button class="btn primary" data-action="${outline.locked ? "go-writing" : "confirm-outline"}">${outline.locked ? "开始初写第一集 →" : "确认并锁定大纲"}</button></div>`}
+      <div class="next-step-card"><div><p class="eyebrow">NEXT STEP</p><h2>${outline.locked ? "大纲与分集标题已经锁定" : "请先确认每一集的标题"}</h2><p>${outline.locked ? "初稿时 AI 将读取创世四块内容与本章位置，但作者仍可继续修改正文。" : "你可以直接修改上方分集标题，确认后再进入初稿。"}</p></div><button class="btn primary" data-action="${outline.locked ? "go-writing" : "confirm-outline"}">${outline.locked ? "开始初稿第一集 →" : "确认并锁定大纲"}</button></div>`}
   `;
+}
+
+function creationBlocksText(p) {
+  const labels = { bookOutline: "全书大纲", firstArc: "第一卷大纲", worldRules: "世界法则", coreCharacters: "核心角色" };
+  const blocks = p.genesis?.creationBlocks || {};
+  return Object.entries(labels).map(([key, label]) => blocks[key]?.trim() ? `【${label}】\n${blocks[key].trim()}` : "").filter(Boolean).join("\n\n") || "暂无";
+}
+
+function chapterFineOutline(p, c) {
+  if (c.fineOutline?.trim()) return c.fineOutline.trim();
+  const task = c.taskCard || {};
+  const act = p.outline?.acts?.find((item) => (item.chapters || []).includes(c.title));
+  const volume = p.volumes?.find((item) => (item.chapterIds || []).includes(c.id));
+  return [
+    `${c.title}｜${volume?.title || act?.title || "当前卷"}`,
+    act?.summary ? `章节位置：${act.summary}` : "",
+    task.goal ? `本章目标：${task.goal}` : "",
+    task.requiredEvents?.length ? `必须事件：${task.requiredEvents.join(" → ")}` : "",
+    task.requiredCharacters?.length ? `出场人物：${task.requiredCharacters.join("、")}` : "",
+    task.foreshadow ? `伏笔：${task.foreshadow}` : "",
+    task.hook ? `收尾钩子：${task.hook}` : ""
+  ].filter(Boolean).join("\n") || `围绕“${c.title}”承接全书大纲与第一卷大纲，完成本章核心冲突、转折和结尾钩子。`;
 }
 
 function writingView(mode = state.view) {
@@ -762,82 +908,37 @@ function writingView(mode = state.view) {
   const c = chapter();
   if (!p || !c) return `<div class="empty">请先创建一个项目。</div>`;
   if (p.outline && !p.outline.locked) return `
-    <section class="apple-hero-card compact-lock">
-      <span class="hero-orb">◫</span><p class="eyebrow">OUTLINE APPROVAL REQUIRED</p>
-      <h2>先确认故事大纲和分集标题</h2>
-      <p>大纲锁定后，AI代写、续写和资产提取才会以同一份故事规划为准。</p>
-      <button class="btn dark" data-action="go-outline">返回确认大纲</button>
-    </section>`;
-  const task = c.taskCard || {};
-  const qualityIssues = normalizeQualityIssues(c.qualityReport?.issues || []);
-  const currentVolume = p.volumes.find((volume)=>volume.chapterIds.includes(c.id));
+    <section class="apple-hero-card compact-lock"><span class="hero-orb">◫</span><p class="eyebrow">OUTLINE APPROVAL REQUIRED</p>
+      <h2>先确认故事大纲和分集标题</h2><p>大纲锁定后，AI 才会以同一份创世规划开始初稿。</p>
+      <button class="btn dark" data-action="go-outline">返回确认大纲</button></section>`;
   const isFinalizeMode = mode === "finalize";
   const isFinalized = c.status === "已完成";
-  const isInitialDone = c.status === "初写完成" || c.status === "快写初稿" || isFinalized;
-  const tools = [
-    ["draft", isFinalizeMode ? "✦ AI生成定稿" : "✦ AI代写"], ["continue", "续写"], ["polish", "润色"], ["expand", "扩写"], ["rewrite", "改写"],
-    ["logic", "逻辑检查"], ["summary", "章节摘要"]
-  ];
-  const scenePlanner = `<section class="panel scene-planner">
-    <div class="panel-head"><div><p class="eyebrow">VOLUME · CHAPTER · SCENE</p><h3>${escapeHtml(currentVolume?.title || "未分卷")} / ${escapeHtml(c.title)}</h3><p>先把本章拆成可写场景；正文与故事板都会按这个顺序读取。</p></div><div class="head-actions"><button class="btn small" data-action="add-scene">＋ 场景</button><button class="btn small primary" data-action="generate-scenes">✦ AI规划场景</button></div></div>
-    <div class="scene-rail">${c.scenes.length ? c.scenes.map((scene,index)=>`<article class="scene-node ${scene.status==="locked"?"locked":""}">
+  const isInitialDone = ["初稿完成", "初写完成", "快写初稿", "已完成"].includes(c.status);
+  const qualityIssues = normalizeQualityIssues(c.qualityReport?.issues || []);
+  const currentVolume = p.volumes.find((volume) => volume.chapterIds.includes(c.id));
+  const tools = [["draft", isFinalizeMode ? "✦ AI生成定稿" : "✦ AI生成初稿"], ["continue","续写"], ["polish","润色"], ["expand","扩写"], ["rewrite","改写"], ["logic","逻辑检查"], ["summary","章节摘要"]];
+  const scenePlanner = isFinalizeMode ? `<section class="panel scene-planner finalize-planner">
+    <div class="panel-head"><div><p class="eyebrow">FOUR SCENE PLAN</p><h3>四个场景规划</h3><p>定稿将按 1—4 的顺序逐场执行；每个场景都可以修改后锁定。</p></div><button class="btn small primary" data-action="generate-scenes">✦ ${c.scenes.length === 4 ? "重新规划4个场景" : "AI规划4个场景"}</button></div>
+    <div class="scene-rail four-scenes">${c.scenes.slice(0,4).map((scene,index)=>`<article class="scene-node ${scene.status==="locked"?"locked":""}">
       <div class="scene-node-top"><span>${String(index+1).padStart(2,"0")}</span><select data-scene-field="beat" data-scene-index="${index}">${["开场","推进","冲突","反转","高潮","收束"].map((beat)=>`<option ${scene.beat===beat?"selected":""}>${beat}</option>`).join("")}</select><button data-action="toggle-scene-lock" data-scene-index="${index}">${scene.status==="locked"?"🔒":"锁定"}</button></div>
       <input data-scene-field="title" data-scene-index="${index}" value="${escapeHtml(scene.title)}" aria-label="场景${index+1}标题" />
       <textarea data-scene-field="summary" data-scene-index="${index}" placeholder="这个场景具体发生什么">${escapeHtml(scene.summary)}</textarea>
-      <div class="scene-node-bottom"><label>张力 <input type="range" min="1" max="5" value="${scene.tension}" data-scene-field="tension" data-scene-index="${index}" /></label><label>字数 <input type="number" value="${scene.targetWords}" data-scene-field="targetWords" data-scene-index="${index}" /></label><button data-action="remove-scene" data-scene-index="${index}">删除</button></div>
-    </article>`).join("") : `<div class="scene-empty"><strong>还没有场景蓝图</strong><p>可以直接让AI规划，也可以逐个添加、调整张力并锁定满意场景。</p></div>`}</div>
-  </section>`;
-  const taskCard = `<section class="panel task-card">
-    <div class="panel-head"><div><h3>本章任务卡</h3><p>AI 代写与质量检查将严格对照这张卡。</p></div><button class="btn small" data-action="ai-fill-task">✦ AI 填写</button></div>
-    <div class="panel-body task-grid">
-      <label>本章目标<input data-task-field="goal" value="${escapeHtml(task.goal || "")}" placeholder="这一章必须推动什么" /></label>
-      <label>结尾钩子<input data-task-field="hook" value="${escapeHtml(task.hook || "")}" placeholder="读者为什么要点下一章" /></label>
-      <label>必须发生的事件<textarea data-task-field="requiredEvents" placeholder="每行一项">${escapeHtml(listValue(task.requiredEvents))}</textarea></label>
-      <label>必须出现的人物<textarea data-task-field="requiredCharacters" placeholder="每行一个人物">${escapeHtml(listValue(task.requiredCharacters))}</textarea></label>
-      <label>禁止发生的事情<textarea data-task-field="forbidden" placeholder="每行一项">${escapeHtml(listValue(task.forbidden))}</textarea></label>
-      <label>埋下 / 回收伏笔<textarea data-task-field="foreshadow">${escapeHtml(task.foreshadow || "")}</textarea></label>
-    </div>
-    ${c.qualityReport ? `<div class="quality-report"><strong>质量检查 ${c.qualityReport.score} 分</strong><div class="quality-issue-list">${qualityIssues.length ? qualityIssues.map((issue, index) => `<button data-action="jump-quality-issue" data-issue-index="${index}" ${issue.query ? "" : "disabled"}>${escapeHtml(issue.message)}${issue.query ? "" : " · 无定位文本"}</button>`).join("") : `<span>任务全部通过</span>`}</div></div>` : ""}
-  </section>`;
-  return `
-    <div class="page-head">
-      <div><p class="eyebrow">${isFinalizeMode ? "FINAL DRAFT ROOM" : "INITIAL DRAFT ROOM"}</p><h1>${escapeHtml(p.title)}</h1><p class="subtext">${isFinalizeMode ? "这里确认最终定稿；确认后才会提取定妆资产并进入图片输出流程。" : "这里负责初写和作者修改；大纲只提供灵感，不在这一阶段提前锁死视觉资产。"}</p></div>
-      <div class="head-actions"><button class="btn" data-action="go-outline">查看故事大纲</button>${isFinalizeMode ? `<button class="btn" data-action="go-writing">返回初写</button>` : `<button class="btn" data-action="go-finalize">进入定稿</button>`}<button class="btn dark" data-action="add-chapter">＋ 新建章节</button></div>
-    </div>
-    ${scenePlanner}
-    ${taskCard}
-    <div class="workspace">
-      <aside class="panel">
-        <div class="panel-head"><h3>章节目录</h3><button class="btn small" data-action="add-chapter">＋ 新增篇</button></div>
-        <div class="chapter-list volume-chapter-list">${p.volumes.map((volume)=>`<details class="volume-group" ${volume.chapterIds.includes(c.id) ? "open" : ""}><summary class="volume-label"><strong>${escapeHtml(volume.title)}</strong><span>${volume.chapterIds.length}集</span></summary>${volume.chapterIds.map((chapterId)=>{
-          const item=p.chapters.find((ch)=>ch.id===chapterId); if(!item) return "";
-          const index=p.chapters.indexOf(item);
-          return `<div class="chapter-tree-row ${item.id === c.id ? "active" : ""}"><button class="chapter-item" data-chapter="${item.id}"><b>${escapeHtml(item.title || `第${index + 1}章`)}</b><span>${item.scenes.length} 场 · ${countText(item.content)} 字 · ${escapeHtml(item.hasUnpublishedChanges?"有未发布修改":item.status)}</span></button><button class="chapter-row-delete" data-action="remove-chapter" data-chapter-id="${item.id}" title="删除这一集">×</button></div>`;
-        }).join("")}</details>`).join("")}</div>
-      </aside>
-      <section>
-        <div class="panel">
-          <div class="editor-tools">${tools.map(([tool,label]) => `<button class="btn small" ${tool === "draft" ? `data-action="open-ai-draft"` : `data-ai="${tool}"`} ${state.busy || (isFinalized && isFinalizeMode) ? "disabled" : ""}>${label}</button>`).join("")}</div>
-          <input class="editor-title" id="chapterTitle" value="${escapeHtml(c.title)}" aria-label="分集标题" ${isFinalized && isFinalizeMode ? "readonly" : ""} />
-          ${!c.content ? `<div class="empty-draft"><span>✦</span><h2>这一章还没有正文</h2><p>选择目标字数和剧情方向，AI会读取已锁定大纲直接完成初稿。</p><button class="btn primary" data-action="open-ai-draft">配置 AI 代写</button></div>` : ""}
-          <textarea class="editor ${!c.content ? "visually-empty" : ""}" id="chapterEditor" placeholder="从这里开始写下故事……" ${isFinalized && isFinalizeMode ? "readonly" : ""}>${escapeHtml(c.content)}</textarea>
-          <div class="editor-foot"><span>自动保存到本机</span><div><button class="btn small ghost" data-action="quality-check">AI 质量检查</button><span id="wordCount">${countText(c.content)} 字</span></div></div>
-        </div>
-        ${c.content ? `<div class="chapter-complete-bar ${c.status === "已完成" ? "done" : ""}">
-          <div><span class="complete-icon">${isFinalized ? "✓" : isInitialDone ? "2" : "1"}</span><div><h3>${isFinalizeMode ? isFinalized ? "本章已经定稿" : "确认最终定稿？" : isInitialDone ? "本章初写已完成" : "确认初写内容？"}</h3><p>${isFinalizeMode ? isFinalized ? "正文已保存，视觉资产已经提取，可以继续生成故事板。" : "定稿后将锁定本章，并对比资产库提取新增人物、场景和道具。" : "初写完成后，你可以去设定百科和动态记忆补角色、删角色、设置出场集数，再进入定稿。"}</p></div></div>
-          ${isFinalizeMode
-            ? isFinalized ? `<div class="head-actions"><button class="btn" data-action="edit-completed-chapter">修改定稿</button><button class="btn primary" data-action="chapter-storyboard">一键生成故事板 →</button></div>` : `<button class="btn primary" data-action="finalize-chapter">确认定稿并提取视觉资产</button>`
-            : isInitialDone ? `<div class="head-actions"><button class="btn" data-action="edit-completed-chapter">继续修改</button><button class="btn primary" data-action="go-finalize">进入定稿 →</button></div>` : `<button class="btn primary" data-action="complete-initial-draft">完成初写</button>`}
-        </div>` : ""}
-        <div class="panel ai-drawer">
-          <div class="panel-head"><h3>AI 创作建议</h3><span class="tag">${state.busy ? "生成中" : state.aiStatus.connected ? "实时模型" : "演示模式"}</span></div>
-          <div class="panel-body">
-            <div class="ai-result ${state.busy ? "loading" : ""}">${escapeHtml(state.aiResult || "选择上方操作，AI 将结合故事圣经和当前章节协助创作。")}</div>
-            ${state.aiResult && !state.busy && !state.aiResult.startsWith("本章") && !state.aiResult.startsWith("生成失败：") && !state.aiResult.startsWith("4YI 网关调用失败：") ? `<div style="margin-top:14px;display:flex;gap:8px"><button class="btn primary small" data-action="append-ai">插入到正文</button><button class="btn small" data-action="clear-ai">清除</button></div>` : state.aiResult?.startsWith("生成失败：") || state.aiResult?.startsWith("4YI 网关调用失败：") ? `<div style="margin-top:14px;display:flex;gap:8px"><button class="btn small" data-action="clear-ai">清除</button></div>` : ""}
-          </div>
-        </div>
-      </section>
-    </div>`;
+      <div class="scene-node-bottom"><label>张力 <input type="range" min="1" max="5" value="${scene.tension}" data-scene-field="tension" data-scene-index="${index}" /></label><label>字数 <input type="number" value="${scene.targetWords}" data-scene-field="targetWords" data-scene-index="${index}" /></label></div>
+    </article>`).join("") || `<div class="scene-empty"><strong>还没有四场景规划</strong><p>点击上方按钮，系统会依据本章细纲一次生成四个连续场景。</p></div>`}</div></section>` : "";
+  const finalPlan = isFinalizeMode ? `<section class="panel final-outline-card"><div class="panel-head"><div><p class="eyebrow">CHAPTER FINE OUTLINE</p><h3>创世生成的本章细纲</h3><p>定稿以此细纲为主约束，并逐一落实下面四个场景。</p></div><span class="tag">严格执行</span></div><textarea id="chapterFineOutline" class="fine-outline-editor" placeholder="补充本章细纲……">${escapeHtml(chapterFineOutline(p,c))}</textarea></section>` : "";
+  return `<div class="page-head"><div><p class="eyebrow">${isFinalizeMode ? "FINAL DRAFT ROOM" : "FIRST DRAFT ROOM"}</p><h1>${escapeHtml(p.title)}</h1><p class="subtext">${isFinalizeMode ? "结合本章细纲与四个场景规划生成最终定稿。" : "AI 直接读取创世四块内容生成初稿，本页只保留正文创作。"}</p></div>
+    <div class="head-actions"><button class="btn" data-action="go-outline">查看故事大纲</button>${isFinalizeMode ? `<button class="btn" data-action="go-writing">返回初稿</button>` : `<button class="btn" data-action="go-finalize">进入定稿</button>`}<button class="btn dark" data-action="add-chapter">＋ 新建章节</button></div></div>
+    ${finalPlan}${scenePlanner}
+    <div class="workspace"><aside class="panel"><div class="panel-head"><h3>章节目录</h3><button class="btn small" data-action="add-chapter">＋ 新增篇</button></div><div class="chapter-list volume-chapter-list">${p.volumes.map((volume)=>`<details class="volume-group" ${volume.chapterIds.includes(c.id)?"open":""}><summary class="volume-label"><strong>${escapeHtml(volume.title)}</strong><span>${volume.chapterIds.length}章</span></summary>${volume.chapterIds.map((chapterId)=>{ const item=p.chapters.find((ch)=>ch.id===chapterId); if(!item)return ""; const index=p.chapters.indexOf(item); return `<div class="chapter-tree-row ${item.id===c.id?"active":""}"><button class="chapter-item" data-chapter="${item.id}"><b>${escapeHtml(item.title||`第${index+1}章`)}</b><span>${countText(item.content)} 字 · ${escapeHtml(item.hasUnpublishedChanges?"有未发布修改":item.status)}</span></button><button class="chapter-row-delete" data-action="remove-chapter" data-chapter-id="${item.id}" title="删除这一章">×</button></div>`;}).join("")}</details>`).join("")}</div></aside>
+      <section><div class="panel"><div class="editor-tools">${tools.map(([tool,label])=>`<button class="btn small" ${tool==="draft"?`data-action="open-ai-draft"`:`data-ai="${tool}"`} ${state.busy||(isFinalized&&isFinalizeMode)?"disabled":""}>${label}</button>`).join("")}</div>
+        <input class="editor-title" id="chapterTitle" value="${escapeHtml(c.title)}" aria-label="章节标题" ${isFinalized&&isFinalizeMode?"readonly":""}/>
+        ${!c.content?`<div class="empty-draft"><span>✦</span><h2>这一章还没有正文</h2><p>${isFinalizeMode?"先确认本章细纲和四个场景，再生成定稿。":"选择目标字数，AI 会读取创世四块内容生成初稿。"}</p><button class="btn primary" data-action="open-ai-draft">${isFinalizeMode?"生成定稿":"配置 AI 初稿"}</button></div>`:""}
+        <textarea class="editor ${!c.content?"visually-empty":""}" id="chapterEditor" placeholder="从这里开始写下故事……" ${isFinalized&&isFinalizeMode?"readonly":""}>${escapeHtml(c.content)}</textarea>
+        <div class="editor-foot"><span>自动保存到本机</span><div><button class="btn small ghost" data-action="quality-check">AI 质量检查</button><span id="wordCount">${countText(c.content)} 字</span></div></div>
+        ${isFinalizeMode&&!isFinalized?`<div class="generate-final-row"><div><strong>细纲 + 四场景 → 完整定稿</strong><p>生成前会检查四个场景是否齐全。</p></div><button class="btn primary" data-action="generate-final-draft">✦ 生成定稿</button></div>`:""}
+      </div>
+      ${c.content?`<div class="chapter-complete-bar ${isFinalized?"done":""}"><div><span class="complete-icon">${isFinalized?"✓":isInitialDone?"2":"1"}</span><div><h3>${isFinalizeMode?(isFinalized?"本章已经定稿":"确认最终定稿？"):(isInitialDone?"本章初稿已完成":"确认初稿内容？")}</h3><p>${isFinalizeMode?"确认后将保存正文并提取视觉资产。":"初稿完成后可进入定稿，按细纲和四场景进行最终生成。"}</p></div></div>${isFinalizeMode?(isFinalized?`<div class="head-actions"><button class="btn" data-action="edit-completed-chapter">修改定稿</button><button class="btn primary" data-action="chapter-storyboard">一键生成故事板 →</button></div>`:`<button class="btn primary" data-action="finalize-chapter">确认定稿并提取视觉资产</button>`):(isInitialDone?`<div class="head-actions"><button class="btn" data-action="edit-completed-chapter">继续修改</button><button class="btn primary" data-action="go-finalize">进入定稿 →</button></div>`:`<button class="btn primary" data-action="complete-initial-draft">完成初稿</button>`)}</div>`:""}
+      <div class="panel ai-drawer"><div class="panel-head"><h3>AI 创作建议</h3><span class="tag">${state.busy?"生成中":state.aiStatus.connected?"实时模型":"演示模式"}</span></div><div class="panel-body"><div class="ai-result ${state.busy?"loading":""}">${escapeHtml(state.aiResult||"选择上方操作，AI 将结合当前章节协助创作。")}</div></div></div></section></div>`;
 }
 
 function quickValueList(value) {
@@ -1038,7 +1139,7 @@ function quickConfigView(q) {
   const config = q.config;
   const isTemplateMode = config.mode === "模板创作";
   return `<section class="panel quick-panel">
-    <div class="panel-head"><div><p class="eyebrow">QUICK CREATE</p><h3>核心要求</h3><p>可以直接按固定模板创作；如果模板不满意，再切到自定义标签，自由组合题材、人设、情节和世界观。</p></div><span class="tag">第一步</span></div>
+    <div class="panel-head"><div><p class="eyebrow">QUICK CREATE</p><h3>先定故事方向</h3><p>先选一个模板，再按需调整设置；不确定的选项可以保留默认值。下一步会先生成可修改的灵感。</p></div><span class="tag">第 1 / 6 步</span></div>
     <div class="panel-body quick-config-grid">
       <div class="quick-field full quick-mode-field"><label>创作方式</label><div class="segmented-options small">${quickChoiceButtons("mode", QUICK_OPTIONS.mode, config.mode)}</div></div>
       <div class="quick-field"><label>语言</label><div class="segmented-options small">${quickChoiceButtons("language", QUICK_OPTIONS.language, config.language)}</div></div>
@@ -1173,7 +1274,7 @@ function quickView() {
     draft: quickDraftView
   };
   return `<div class="page-head">
-    <div><p class="eyebrow">FAST CREATE PIPELINE</p><h1>快速创作</h1><p class="subtext">模板创作直接开跑；自定义标签可以自由组合题材、人设、世界观和情节。</p></div>
+    <div><p class="eyebrow">FAST CREATE PIPELINE</p><h1>快速创作</h1><p class="subtext">先试写方向，再逐步完善章节与正文；完成后可保存为项目继续创作。</p></div>
     <div class="head-actions"><button class="btn" data-action="quick-new-creation">新的创作</button><button class="btn" data-action="quick-save-project">保存进度</button><button class="btn dark" data-action="back-projects">返回项目中心</button></div>
   </div>
   ${quickStepper(q.step)}
@@ -1395,8 +1496,39 @@ function detectMissingAssets(text, assets) {
   return [...new Set(candidates)].slice(0, 4);
 }
 
+function bookSearchResults(query) {
+  const p = project();
+  if (!p) return "";
+  const term = query.trim().toLocaleLowerCase();
+  if (!term) return `<p class="book-search-hint">输入角色、设定、章节或正文关键词，点击结果直达。</p>`;
+  const matches = [
+    ...p.chapters.map((item) => ({ type: "章节", view: "drafting", id: item.id, title: item.title, detail: item.content || item.summary || "尚无正文" })),
+    ...p.entities.map((item) => ({ type: "设定", view: "encyclopedia", id: item.id, title: item.name, detail: `${item.summary} ${(item.aliases || []).join(" ")}` })),
+    ...p.memories.map((item) => ({ type: "记忆", view: "bible", id: item.id, title: item.title, detail: item.content })),
+    ...(p.inspirationNotes || []).map((item) => ({ type: "灵感", view: "inspiration", id: item.id, title: item.text.slice(0, 30), detail: item.text })),
+    ...p.assets.map((item) => ({ type: "资产", view: "assets", id: item.id, title: item.name, detail: item.desc || "" }))
+  ].filter((item) => `${item.title} ${item.detail}`.toLocaleLowerCase().includes(term)).slice(0, 30);
+  return matches.length ? matches.map((item) => {
+    const source = String(item.detail || "");
+    const position = source.toLocaleLowerCase().indexOf(term);
+    const excerpt = position < 0 ? source.slice(0, 90) : source.slice(Math.max(0, position - 32), position + 58);
+    return `<button class="book-search-result" data-search-view="${item.view}" data-search-id="${escapeHtml(item.id)}"><span>${item.type}</span><strong>${escapeHtml(item.title)}</strong><small>${escapeHtml(excerpt)}</small></button>`;
+  }).join("") : `<p class="book-search-hint">没有找到“${escapeHtml(query.trim())}”。试试更短的关键词。</p>`;
+}
+
+function bookSearchModal() {
+  return `<div class="modal-backdrop"><div class="modal book-search-modal" role="dialog" aria-label="搜索本书">
+    <div class="modal-head"><div><p class="eyebrow">BOOK SEARCH</p><h2>搜索本书</h2></div><button class="btn small ghost" data-action="close-modal">✕</button></div>
+    <div class="modal-body"><input id="bookSearchInput" type="search" autocomplete="off" value="${escapeHtml(state.bookSearch)}" placeholder="搜索章节、正文、设定、记忆、资产…" aria-label="搜索关键词" />
+      <div class="book-search-results" id="bookSearchResults">${bookSearchResults(state.bookSearch)}</div></div>
+  </div></div>`;
+}
+
 function modal() {
   if (!state.modal) return "";
+  if (state.modal === "book-ideas") return bookIdeasModal();
+  if (state.modal === "book-setup") return bookSetupModal();
+  if (state.modal === "book-search") return bookSearchModal();
   if (state.modal === "project") return projectWizard();
   if (state.modal === "asset") return assetModal();
   if (state.modal === "ai-draft") return aiDraftModal();
@@ -1410,6 +1542,124 @@ function modal() {
   if (state.modal === "trash") return trashModal();
   if (state.modal === "trash-delete") return trashDeleteModal();
   return "";
+}
+
+const BOOK_IDEA_ROUTES = [
+  { id:"fast", label:"高钩子快节奏", hint:"开局迅速兑现卖点，适合高频追更" },
+  { id:"long", label:"长线成长", hint:"建立能力边界、升级阶梯和可持续矛盾" },
+  { id:"fresh", label:"差异化脑洞", hint:"改变故事机制，制造意料之外的反转" }
+];
+const BOOK_IDEA_PROGRESS = {
+  core: ["正在理解题材与风格…","正在寻找主角的特殊处境…","正在设计核心机制与代价…","正在安排开局冲突…","正在压缩为清晰的核心脑洞…"],
+  routes: ["正在拆分三种立书方向…","正在设计高钩子开局…","正在建立长线成长阶梯…","正在寻找差异化反转…","正在检查三条路线是否重复…","正在整理书名与完整梗概…"]
+};
+let bookIdeaProgressTimer = null;
+function startBookIdeaProgress(kind) {
+  if (bookIdeaProgressTimer) clearInterval(bookIdeaProgressTimer);
+  state.busy = true;
+  state.bookIdeaProgress = { kind, index: 0, startedAt: Date.now() };
+  bookIdeaProgressTimer = setInterval(() => {
+    const stages = BOOK_IDEA_PROGRESS[kind];
+    state.bookIdeaProgress.index = (state.bookIdeaProgress.index + 1) % stages.length;
+    if (state.modal === "book-ideas") render();
+  }, 900);
+  render();
+}
+function stopBookIdeaProgress() {
+  if (bookIdeaProgressTimer) clearInterval(bookIdeaProgressTimer);
+  bookIdeaProgressTimer = null;
+  state.busy = false;
+  state.bookIdeaProgress = { kind: "", index: 0 };
+}
+async function keepBookIdeaProgressVisible(minimumMs) {
+  const elapsed = Date.now() - Number(state.bookIdeaProgress.startedAt || Date.now());
+  if (elapsed < minimumMs) await new Promise(resolve=>setTimeout(resolve, minimumMs - elapsed));
+}
+function bookIdeaProgressView() {
+  const progress = state.bookIdeaProgress;
+  const stages = BOOK_IDEA_PROGRESS[progress.kind] || BOOK_IDEA_PROGRESS.routes;
+  const current = stages[progress.index] || stages[0];
+  return `<section class="book-idea-progress">
+    <div class="book-idea-progress-head"><div><i></i><i></i><i></i><strong>4YI 推演中</strong></div><span>${progress.index + 1} / ${stages.length}</span></div>
+    <div class="book-idea-progress-line"><span>${escapeHtml(current)}</span></div>
+    <div class="book-idea-skeleton-grid">${[0,1,2].map(index=>`<article><b></b><i></i><i></i><i></i><small>方向 0${index+1}</small></article>`).join("")}</div>
+  </section>`;
+}
+function bookIdeaMultiSelect(field, label, options) {
+  const idea = state.bookIdea;
+  const values = idea[field + "Values"] || [];
+  const other = idea[field + "Other"] || "";
+  const selectedText = [...values, other].filter(Boolean).join("、") || ("请选择" + label);
+  return `<details class="book-idea-multiselect">
+    <summary><span data-idea-summary="${field}">${escapeHtml(selectedText)}</span><i>⌄</i></summary>
+    <div class="book-idea-option-menu">
+      ${options.filter(item=>item!=="随机").map(item=>`<label><input type="checkbox" data-idea-multi="${field}" value="${escapeHtml(item)}" aria-label="${escapeHtml(item)}" ${values.includes(item)?"checked":""}/><span>${escapeHtml(item)}</span></label>`).join("")}
+      <div class="book-idea-other"><strong>其他（手写输入）</strong><input data-idea-other="${field}" aria-label="其他${label}" value="${escapeHtml(other)}" placeholder="输入自定义${label}，可与上面多选组合" /></div>
+    </div>
+  </details>`;
+}
+function bookIdeasModal() {
+  const idea = state.bookIdea;
+  return `<div class="modal-backdrop"><div class="modal book-ideas-modal">
+    <div class="modal-head"><div><p class="eyebrow">NEW STORY · 4YI</p><h2>从一个脑洞，推演三本不同的书</h2><p>先比较方向，再进入五步建书。推演不会直接创建项目。</p></div><button class="btn small ghost" data-action="close-modal">✕</button></div>
+    <div class="modal-body">
+      <div class="book-idea-inputs">
+        <div class="field"><label>题材 / 类目（可多选）</label>${bookIdeaMultiSelect("genre","题材",QUICK_OPTIONS.genre)}</div>
+        <div class="field"><label>风格关键词（可多选）</label>${bookIdeaMultiSelect("style","风格",QUICK_OPTIONS.styleMode)}</div>
+        <div class="field full"><div class="book-idea-field-head"><label for="ideaPremise">核心脑洞 *</label><div><button class="btn small" data-action="generate-core-premise" ${state.busy?"disabled":""}>${state.busy?"AI 构思中…":idea.premise?"↻ 换一个":"✦ AI 生成"}</button></div></div><textarea id="ideaPremise" placeholder="可以自己写，也可以先填写题材和风格，让 AI 帮你生成">${escapeHtml(idea.premise)}</textarea>${idea.premiseDemo ? `<small class="book-idea-demo-note">当前是本地灵感示例；配置密钥后会改用 AI 生成。</small>` : ""}</div>
+      </div>
+      ${state.busy ? bookIdeaProgressView() : `<div class="book-idea-toolbar"><span>${idea.options.length ? idea.demo ? "本地结构示例 · 配置密钥后可由 AI 推演" : "AI 推演结果 · 请选择最想写的方向" : "三条路线会分别强调即时爽点、长线成长和差异化机制"}</span><button class="btn primary" data-action="generate-book-ideas">${idea.options.length?"重新推演三种方向":"推演三种方向"}</button></div>
+      ${idea.options.length ? `<div class="book-idea-grid">${idea.options.map((option,index)=>`<button class="book-idea-card ${idea.selected===index?"selected":""}" data-book-idea="${index}"><span class="book-idea-route">0${index+1} · ${escapeHtml(BOOK_IDEA_ROUTES[index].label)}</span><strong>${escapeHtml(option.title)}</strong><p>${escapeHtml(option.summary)}</p><small>${escapeHtml(option.mechanism || BOOK_IDEA_ROUTES[index].hint)}</small></button>`).join("")}</div>` : `<div class="book-idea-empty">写下你的核心脑洞，点击推演后比较三条不同的立书方向。</div>`}`}
+    </div>
+    <div class="modal-foot"><button class="btn" data-action="manual-book-wizard">跳过推演，手动建书</button><button class="btn primary" data-action="select-book-idea" ${idea.selected<0?"disabled":""}>选这个方向，继续建书 →</button></div>
+  </div></div>`;
+}
+
+const BOOK_COVER_THEMES = [
+  { id:"ember", label:"烬火长夜", mark:"破局", glyph:"火" },
+  { id:"jade", label:"青山异闻", mark:"东方奇谭", glyph:"山" },
+  { id:"void", label:"深空序列", mark:"高概念", glyph:"Ω" },
+  { id:"city", label:"都市暗流", mark:"逆袭", glyph:"城" }
+];
+
+function syncBookSetupInputs() {
+  const w = state.wizard;
+  if ($("#setupTitle")) w.title = $("#setupTitle").value.trim();
+  if ($("#setupCategory")) {
+    const category = $("#setupCategory").value;
+    w.genre = category ? [category, ...(w.genre || []).filter(item=>item!==category)].slice(0,4) : (w.genre || []);
+  }
+  if ($("#setupSynopsis")) w.logline = $("#setupSynopsis").value.trim();
+}
+
+function bookSetupModal() {
+  const w = state.wizard;
+  const theme = BOOK_COVER_THEMES.find(item=>item.id===w.coverTheme) || BOOK_COVER_THEMES[0];
+  const categories = [...new Set([...(w.genre || []), ...QUICK_OPTIONS.genre.filter(item=>item!=="随机")])];
+  const genre = w.genre?.[0] || "";
+  return `<div class="modal-backdrop book-setup-backdrop"><div class="modal book-setup-modal" role="dialog" aria-label="作品立项">
+    <aside class="book-setup-aside"><p class="book-setup-en">CREATE</p><h2>作品立项</h2><i></i><p>确认读者第一眼看到的书籍信息，再进入五步建书。</p><button class="book-setup-return" data-action="back-book-ideas">← 返回脑洞推演</button></aside>
+    <section class="book-setup-main">
+      <header><div><p class="eyebrow">BOOK PROFILE · 00</p><h2>先让这本书站在读者面前</h2></div><span>✦ 4YI 协助</span><button class="book-setup-close" data-action="close-modal" aria-label="关闭">✕</button></header>
+      <div class="book-setup-content">
+        <div class="book-cover-column">
+          <div class="novel-cover ${theme.id}">
+            ${w.coverImage ? `<img src="${escapeHtml(w.coverImage)}" alt="上传的书籍封面" />` : `<div class="novel-cover-art"><b>${escapeHtml(theme.glyph)}</b><em></em><span>${escapeHtml(theme.mark)}</span></div>`}
+            <div class="novel-cover-copy"><strong>${escapeHtml(w.title || "未命名新书")}</strong><small>4YI 著</small></div>
+          </div>
+          <div class="book-cover-actions"><button class="btn" data-action="upload-book-cover">上传封面</button><button class="btn dark" data-action="generate-book-cover">✦ 换一款</button><input id="bookCoverUpload" type="file" accept="image/png,image/jpeg,image/webp" hidden /></div>
+          <small>建议 600 × 800 px，支持 JPG、PNG、WebP</small>
+        </div>
+        <div class="book-profile-fields">
+          <label><span>书名 <b>/ TITLE</b></span><input id="setupTitle" maxlength="40" value="${escapeHtml(w.title || "")}" placeholder="输入一个有记忆点的书名" /></label>
+          <label><span>主分类 <b>/ CATEGORY</b></span><select id="setupCategory"><option value="">请选择主分类</option>${categories.map(item=>`<option value="${escapeHtml(item)}" ${genre===item?"selected":""}>${escapeHtml(item)}</option>`).join("")}</select></label>
+          <label class="synopsis"><span>作品简介 <b>/ SYNOPSIS</b><small id="setupSynopsisCount">${String(w.logline || "").length} / 500</small></span><textarea id="setupSynopsis" maxlength="500" placeholder="用一个异常开局、一个核心矛盾和一个追读悬念吸引读者…">${escapeHtml(w.logline || "")}</textarea></label>
+          <div class="book-profile-note"><span>◇</span><p><strong>展示预览</strong>这些内容会成为项目首页的书籍名片，后续仍可修改。</p></div>
+        </div>
+      </div>
+      <footer><button class="btn" data-action="back-book-ideas">取消</button><button class="btn primary book-setup-next" data-action="enter-book-wizard">确认立项，进入五步建书 →</button></footer>
+    </section>
+  </div></div>`;
 }
 
 function deleteProjectModal() {
@@ -1448,17 +1698,24 @@ function trashDeleteModal() {
 function entityModal() {
   const p = project();
   const entity = p.entities.find((item)=>item.id===state.entityEditId) || normalizeEntity({});
-  const labels = [["character","人物"],["location","地点"],["faction","势力"],["prop","道具"],["rule","规则"]];
+  const labels = ENTITY_TYPES;
   return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div><p class="eyebrow">ENCYCLOPEDIA ENTITY</p><h2>${state.entityEditId?"编辑设定":"新建设定"}</h2></div><button class="btn small ghost" data-action="close-modal">✕</button></div>
   <div class="modal-body"><div class="form-grid">
     <div class="field"><label>类型</label><select id="entityType">${labels.map(([id,label])=>`<option value="${id}" ${entity.type===id?"selected":""}>${label}</option>`).join("")}</select></div>
     <div class="field"><label>状态</label><select id="entityStatus"><option value="draft" ${entity.status==="draft"?"selected":""}>草稿</option><option value="confirmed" ${entity.status==="confirmed"?"selected":""}>已确认</option></select></div>
     <div class="field full"><label>名称</label><input id="entityName" value="${escapeHtml(state.entityEditId?entity.name:"")}" placeholder="例如：倚天剑" /></div>
     <div class="field full"><label>静态设定摘要</label><textarea id="entitySummary" placeholder="只写长期稳定的信息，不写当前持有人或临时状态">${escapeHtml(state.entityEditId?entity.summary:"")}</textarea></div>
+    <div class="field"><label>所在分组</label><select id="entityFolder"><option value="">未分组</option>${(p.entityFolders||[]).map(folder=>`<option value="${folder.id}" ${entity.folderId===folder.id?"selected":""}>${escapeHtml(folder.name)}</option>`).join("")}</select></div>
+    <div class="field"><label>角色身份</label><select id="entityRole">${[["ordinary","普通角色"],["lead","主角"],["important","重要角色"],["antagonist","主要反派"]].map(([id,label])=>`<option value="${id}" ${entity.role===id?"selected":""}>${label}</option>`).join("")}</select></div>
+    <div class="field"><label>生效范围</label><select id="entityScope">${Object.entries(ENTITY_SCOPE_LABELS).map(([id,label])=>`<option value="${id}" ${entity.scope===id?"selected":""}>${label}</option>`).join("")}</select></div>
+    <div class="field"><label>绑定卷宗</label><select id="entityVolume"><option value="">未绑定</option>${p.volumes.map(volume=>`<option value="${volume.id}" ${entity.volumeId===volume.id?"selected":""}>${escapeHtml(volume.title)}</option>`).join("")}</select></div>
+    <div class="field full"><label>详细档案</label><textarea id="entityContent" class="entity-content-input" placeholder="用 # 标题、【小节】和段落写完整档案；保存后自动排版展示">${escapeHtml(entity.content)}</textarea></div>
+    <div class="field full"><label>关键事实（每行一条）</label><textarea id="entityKeyFacts" placeholder="稳定、不可轻易变化的信息">${escapeHtml(listValue(entity.keyFacts))}</textarea></div>
+    <div class="field full"><label>自定义属性（每行一条，例如：阵营：自由人）</label><textarea id="entityAttributes">${escapeHtml(listValue(entity.attributes))}</textarea></div>
     <div class="field"><label>别名（逗号分隔）</label><input id="entityAliases" value="${escapeHtml(entity.aliases.join("、"))}" /></div>
     <div class="field"><label>首次出场章节</label><select id="entityFirstChapter"><option value="">未指定</option>${p.chapters.map((c)=>`<option value="${c.id}" ${entity.firstChapterId===c.id?"selected":""}>${escapeHtml(c.title)}</option>`).join("")}</select></div>
     <div class="field full"><label>关系（每行一条，例如：持有人 → 张无忌）</label><textarea id="entityRelations">${escapeHtml(listValue(entity.relations))}</textarea></div>
-  </div><div class="notice">百科保存静态身份；“现在由谁持有、是否损坏、人物是否受伤”等变化请记录到动态记忆。</div></div>
+  </div><div class="notice">百科保存静态身份；当前持有人、伤势等变化请记录到动态记忆。设定内容由你撰写，演示模式也能完整编辑和保存。</div></div>
   <div class="modal-foot"><button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="save-entity">保存设定</button></div></div></div>`;
 }
 function memoryModal() {
@@ -1528,6 +1785,135 @@ function buildSoulCards(w) {
   };
 }
 
+const CREATION_BLOCKS = [
+  { id:"bookOutline", numeral:"壹", title:"全书大纲", subtitle:"鸿图初定 · 卷脉初成", points:["全书卷级结构","各卷功能与核心事件","起始状态 → 结束状态","关键爽点与伏笔","全书字数分配","小・中・大爽点节奏","核心伏笔线与回收节点"] },
+  { id:"firstArc", numeral:"贰", title:"第一卷大纲", subtitle:"起势之卷 · 章节落地", points:["卷级信息与核心功能","逐章情绪弧线与起承转合","主角・反派・导师・引路人卷内弧线","逐章小爽点・阶段中爽点・卷末大爽点","本卷伏笔埋设与回收","三次核心反转","主线与次线冲突","卷内章节分段","写作重点与下卷钩子"] },
+  { id:"worldRules", numeral:"叁", title:"世界法则", subtitle:"世界的第一道边界", points:["一句话大白话","核心机制与继承原则","触发方式与生效反馈","升级资源","分阶段晋升阶梯","极致爽点与反差反馈","触发条件・代价・节奏闸门","后续升级钩子"] },
+  { id:"coreCharacters", numeral:"肆", title:"核心角色", subtitle:"先被唤醒的人", points:["基础档案・身份・年龄・阵营","外观印象与视觉锚点","性格关键词・口癖・标志动作","核心能力与致命软肋","高光场景","剧情定位・关键节点・退场方式","核心羁绊・阵营立场・关系钩子","打脸对象与标志台词"] }
+];
+
+const CREATION_BLOCK_REQUIREMENTS = {
+  bookOutline: `【输出强度】正文不少于3500个中文字。根据目标字数规划6—10卷，不得只给三幕概括。
+【全书摘要】先给1出一句50—120字的全书蓝图，写明总卷数、总章数、主角起点、能力终点和终局。
+【每卷固定格式】每一卷都必须逐项写：卷名（字数区间、章数）；本卷功能；5—8个有因果的核心事件（用箭头串联）；起始状态→结束状态；至少4个具体爽点；至少3条伏笔并标注“埋/现/误导/回收/收”。事件必须使用本书专属人名、势力名、道具名和机制名，不得写“某势力”“发生危机”。
+【总表】末尾必须绑出：逐卷字数和章数表（总和必须接近目标字数）；小爽点、中爽点、大爽点的频率与本书专属例子；至少5条跨卷伏笔线，每条写明“哪卷埋设→哪卷发展→哪卷回收→真相”。`,
+  firstArc: `【输出强度】正文不少于3500个中文字。这是“第一卷大纲”，不是第一章的细纲。必须严格承接全书大纲的第一卷，卷名、字数、章数、事件、人名和伏笔不得改动。
+【卷首摘要】先输出卷名，再用50—120字写“卷一蓝图”，一句包含章数、字数、核心卖点、卷内最大事件和下卷接口。
+【卷级信息】分别写明：字数及占全书比例；章数范围及每章平均字数；本卷在全书中的核心功能。
+【情绪弧线】必须逐章列出“第N章 [情绪节点] 具体情绪与事件”，用箭头显示走势；再单独解释承、转、合分别落在哪些章，最后总结“目标情绪”链。
+【人物弧线】分别写主角、第一反派、导师/任务源、引路人；主角必须有起点、转折、成长、终点，其他人至少写起点、终点与本卷作用。
+【爽点节奏】小爽点必须覆盖本卷每一章，每章1—2个；中爽点按跨章阶段设计至少3个；大爽点安排在卷末高潮，必须详写事件过程、群体反应和格局变化。
+【伏笔设计】分为“本卷埋设”和“本卷回收”；每条写明所在章、表面异常、真实用途和将在哪卷回收。若本卷不回收，必须明确说明原因。
+【反转设计】至少3次，每次固定使用“铺垫—反转—冲击”三段式，不得只写结论。
+【核心冲突】分别写主线冲突和至少3条次线冲突；每条明确冲突双方、各自目标、升级方式和卷末状态。
+【章节分段】将全卷划分为3—5个阶段，每阶段标注章数范围，并用5—8个有因果的具体事件箭头串联。
+【写作重点】至少5条，每条写清要达成的阅读效果、应该怎么写以及最容易写坏的地方；最后明确卷末停在哪个新钩子上。`,
+  worldRules: `【输出强度】正文不少于2400个中文字。不得新增与全书大纲冲突的第二套能力体系。
+【一句话大白话】用100—200字让没看过设定的人也能立即明白“主角凭什么爽、怎么升级、为什么不能无敌”。
+【机制】分别详写核心继承、至少3种触发方式、至少3种生效反馈、升级资源、暴露/失败后果。
+【晋升阶梯】设计4—6个阶段；每阶都必须写“名称、可做什么、不能做什么、升级条件、代表性用法3个、对手如何升级”。
+【爽点与控制】给出本书最强的极致爽点场景；至少4种反差反馈；至少4条节奏闸门，明确准备、冷却、代价、稀缺度或暴露限制。
+【后续钩子】至少4条，每条说明前期如何埋、中期如何误导、后期揭示什么。`,
+  coreCharacters: `【输出强度】这一块只聚焦一位最核心角色，通常是主角；不要分散生成多份完整人物卡。正文不少于1800个中文字，身份、能力、关系和关键节点必须与前三块一致。
+【顶部摘要】先输出角色姓名，再用50—120字写清其身份反差、核心能力、第一卷代表性战绩和卷末状态。
+【基础档案】写明现实/世界内身份、别名或ID、觉醒后称号、职业/组织归属、年龄和阵营立场。
+【外观印象】设计2—3个可在文中反复出现的具体视觉锚点，区分必要的双重外观（如现实/游戏、日常/战斗），并绑出气质标签及其外在表现。
+【性格与口癖】设计3—5个彼此有张力的性格关键词，不只列词，还要说明他在压力下会怎么行动；设计1句口头禅和1个能与视觉锚点结合的标志动作。
+【能力与软肋】完整继承世界法则中的触发、升级、边界和代价；写清第一卷当前所处等级、能做什么和不能做什么；至少3个会真正导致失败的致命软肋；再写一个与第一卷大爽点完全对应的高光场景。
+【剧情作用】先写全书定位与第一卷功能；再引用前两块已确定的3—5个关键章节节点，每个写明角色发生了什么改变；最后说明贯穿方式和结局/退场方式。
+【人际关系】至少写明3条核心羁绊，每条必须使用已有具体人名/势力名，写明错位关系、阵营变化和可在后续回收的关系钩子。
+【流派钩子】列出3类具体打脸对象，再写1句与能力机制、性格和主要对手都有关的专属台词；禁止使用可以套在任何主角身上的通用热血口号。`
+};
+
+function localCreationBlock(id, w) {
+  const title = w.title || "这本新书";
+  const premise = w.logline || w.coreConflict || "主角必须在失去一切前完成第一次逆转";
+  const ability = wizardValue(w,"abilityType") || w.powerMechanism || "核心机制";
+  const hero = samplePersonName(title, 2);
+  const texts = {
+    bookOutline:`【全书卷级结构】\n第1卷｜危机入局：${premise}。功能是立住卖点、完成首次能力兑现，结尾打开更大危机。\n第2卷｜代价显形：主角将${ability}用于更大目标，胜利同时暴露身份和弱点。\n第3卷｜势力博弈：个人矛盾升级为阵营冲突，旧规则开始反扑。\n第4卷｜真相翻转：主角发现能力、对手与自己的过去共用同一个源头。\n第5卷｜终局选择：所有伏笔汇合，主角用不可逆的代价回答核心命题。\n\n【状态与爽点】\n起点：被低估、资源不足、没有退路 → 终点：能主动改写规则，却必须为选择负责。\n小爽点每1—2节一次，中爽点每3—5节一次，每卷末安排一次改变局势的大爽点。\n\n【伏笔与字数】\n总字数按目标约${Math.round(Number(w.targetWords||200000)/10000)}万字分配；前20%完成卖点兑现，中60%持续升级对手与代价，后20%集中回收。核心伏笔依次经过埋设、异常显形、误导、部分揭示和终局回收。`,
+    firstArc:`【卷级信息】\n卷一：裂缝初鸣・失去的第一段记忆。约7章1.4万字，承担“立人、立奇观、立危机”的开局功能。\n\n【情绪弧线】\n第1章[起点]压抑与不甘 → 第2章[上扬]发现${ability} → 第3章[蓄势]接下不可能目标 → 第4—5章[引爆]首次成功却引发超预期后果 → 第6章[余震]对手开始围猎 → 第7章[合]主角主动接下更危险的新目标。\n\n【人物弧线】\n主角${hero}从被动忍受的边缘人，走到第一次主动改变规则；反派从忽视主角变为必须消除他；导师验证主角是否有资格进入更深的规则层；引路人只给线索，不代替主角破局。\n\n【爽点与反转】\n小爽点逐章升级：嘲笑者闭嘴、废招变成入场券、强敌成为目标、一个轻巧动作引爆大后果、群体反应放大战绩、围猎失败、新任务弹出。三次反转依次为：最弱手段是唯一入场券；成功比失败更危险；所有人等他逃跑时，他选择下一个更大目标。\n\n【伏笔・冲突・分段】\n本卷埋设主角被选中的原因、首次成功中的异常、一位知道过多的旁观者。主线是${hero}对抗旧规则，次线是反派围猎、导师试炼和引路人试探。章节分为“废招觉醒”“不可能目标”“首次引爆”“卷末新钩子”四阶段。\n\n【写作重点】\n开局要让压抑有具体来源；${ability}首次生效不能靠旁白解释；大后果要用多方反应呈现；始终保留能力边界；第7章必须停在下一个更危险的目标上。`,
+    worldRules:`【一句话大白话】\n${title}的核心是：${premise}。所有能力、升级和冲突都从这条规则生长，不另起一套互不相干的系统。\n\n【运转机制与晋升阶梯】\n核心继承：${ability}必须保持统一逻辑。\n触发方式：主角主动选择目标并满足明确条件；越阶使用必须先布置时机。\n生效反馈：成功当场带来可见收益，同时改变敌人行动并累积风险。\n升级资源：只有完成稀缺、困难且会改变局势的目标才能获得。\n晋升阶梯：Lv1解决个人生存 → Lv2影响关系与资源 → Lv3干预势力规则 → Lv4触碰世界底层法则。\n\n【爽点与节奏闸门】\n极致爽点来自“最弱的人用最不起眼的手段，造成最大的结果”。每次使用都必须遵守限制：不能直接解决所有对手；目标越大准备越长；成功后会暴露更多信息；越阶使用产生不可逆代价。\n\n【后续钩子】\n新阶段把对手从个人升级为组织；能力源头藏着前代失败者；升级资源的真实用途与表面说法不同；主角的成长速度本身就是一条证据。`,
+    coreCharacters:`【基础档案】\n姓名：${hero}｜身份：被现有秩序低估的边缘人｜年龄：24岁｜阵营：暂无归属，只对自己的目标负责。\n\n【外观印象】\n视觉锚点：衣着普通，但右手留着一道与核心机制有关的旧痕。气质标签：安静、低存在感，看到机会时眼神会突然变亮。\n\n【性格与口癖】\n性格关键词：懒散・偏执・记仇・不愿服输。口头禅：“你们守的是规矩，我找的是缝。”标志动作：得手后不回头看结果，只用拇指擦过右手旧痕。\n\n【能力与软肋】\n核心能力：${ability}，用改变局面代替单纯战力碾压。致命软肋：正面对抗能力弱；对特殊目标容易执着；长期单干导致不信任同伴。高光场景：所有人准备正面决战时，他用一个微小动作让整个战场失去意义。\n\n【剧情作用】\n定位：全书主角，完成从规则边缘人到规则改写者的蜕变。关键节点：能力觉醒、首次改变大局、发现能力真相、为终局付出代价。贯穿全书，结局保留一条与旧世界相连的开放暗线。\n\n【人际关系与流派钩子】\n核心羁绊：与引路人是“被选中者与幕后棋手”；与合作者互相试探；与反派围绕同一套规则给出相反答案。打脸对象：嘲笑他的旁观者、依赖旧规则的强者、认为他只是意外的执法者。标志台词：“我不需要比你强，只要你最依赖的东西不再属于你。”`
+  };
+  return texts[id] || "";
+}
+
+function creationBlockPrompt(block, w) {
+  const previous = CREATION_BLOCKS.filter(item=>item.id!==block.id&&w.creationBlocks?.[item.id]).map(item=>`${item.title}：\n${w.creationBlocks[item.id]}`).join("\n\n");
+  return `你是资深中文网文总策划，正在交付可直接进入连载的详细创世档案。请为《${w.title || "未命名新书"}》生成“${block.title}”。\n题材：${(w.genre||[]).join("、")}；平台：${w.platform||"未指定"}；情绪：${w.tone||"未指定"}；核心故事：${w.logline||w.coreConflict||"未填写"}；目标字数：${w.targetWords||200000}。${previous?`\n已完成的前置创世档案（必须继承专有名词、事件顺序、能力边界和伏笔）：\n${previous}`:""}\n\n${CREATION_BLOCK_REQUIREMENTS[block.id]}\n\n统一要求：\n1. 必须用【小节名】分节，并完整覆盖：${block.points.join("；")}。\n2. 先在内部检查人名、势力、能力层级、章数、字数和伏笔回收是否一致，但不输出检查过程。\n3. 禁止用“发生一场危机”“遇到更强敌人”等空洞句子；每个要点都要写清谁、为了什么、做了什么、导致什么后果。\n4. 不要照抄任何参考作品，不要 Markdown 代码块，不要解释思考过程。只输出该板块正文。`;
+}
+
+async function generateCreationBlockText(block,w,extra="") {
+  const prompt=creationBlockPrompt(block,w)+extra;
+  let text=await aiQuickText(prompt,.78,8000);
+  const minimum={bookOutline:3500,firstArc:3500,worldRules:2400,coreCharacters:1800}[block.id]||2000;
+  if(text && text.length<minimum) {
+    text=await aiQuickText(`${prompt}\n\n上一版只有${text.length}字，达不到交付标准。请保留其中已经具体的设定，重写为完整版，补齐所有数量与结构要求。\n上一版：\n${text}`,.72,10000);
+  }
+  return text;
+}
+
+async function generateCreationJourney() {
+  syncWizardInputs();
+  const w = state.wizard;
+  w.creationBlocks = {};
+  w.creationCollapsed = {};
+  w.creationProgress = { active:0, completed:[], running:true };
+  state.busy = true; render();
+  try {
+    for (let index=0; index<CREATION_BLOCKS.length; index+=1) {
+      const block = CREATION_BLOCKS[index];
+      w.creationProgress.active = index; render();
+      const started = Date.now();
+      let text = "";
+      try { text = await generateCreationBlockText(block,w); } catch {}
+      const elapsed = Date.now()-started;
+      if (elapsed < 1500) await new Promise(resolve=>setTimeout(resolve,1500-elapsed));
+      w.creationBlocks[block.id] = text || localCreationBlock(block.id,w);
+      w.creationProgress.completed.push(block.id);
+      render();
+    }
+    w.worldRules = w.creationBlocks.worldRules;
+    w.creationProgress.running = false;
+    toast(state.aiStatus.connected ? "四块创世档案已生成" : "已生成四块本地创世示例");
+  } finally { state.busy=false; if(w.creationProgress) w.creationProgress.running=false; render(); }
+}
+
+async function regenerateCreationBlock(id) {
+  const block = CREATION_BLOCKS.find(item=>item.id===id);
+  if (!block || state.busy) return;
+  const w = state.wizard;
+  state.busy = true;
+  w.creationProgress = { active:CREATION_BLOCKS.indexOf(block), completed:CREATION_BLOCKS.filter(item=>item.id!==id&&w.creationBlocks?.[item.id]).map(item=>item.id), running:true };
+  render();
+  const started=Date.now();
+  let text="";
+  try { text=await generateCreationBlockText(block,w,"\n这是单块重生，必须换用更具体的事件、反转和限制，不得简化。"); } catch {}
+  const elapsed=Date.now()-started;
+  if(elapsed<1500) await new Promise(resolve=>setTimeout(resolve,1500-elapsed));
+  w.creationBlocks[id]=text||localCreationBlock(id,{...w,title:`${w.title||"新书"}${Date.now()%7}`});
+  if(id==="worldRules") w.worldRules=w.creationBlocks[id];
+  w.creationProgress={active:-1,completed:CREATION_BLOCKS.filter(item=>w.creationBlocks?.[item.id]).map(item=>item.id),running:false};
+  state.busy=false; render(); toast(`已重新生成${block.title}`);
+}
+
+function creationJourneyView(w) {
+  const progress = w.creationProgress || {active:-1,completed:[],running:false};
+  const blocks = w.creationBlocks || {};
+  const completed = progress.completed || [];
+  if (!Object.keys(blocks).length && !progress.running) return `<section class="creation-awaken"><span>🌱</span><div><p class="eyebrow">AWAKEN THE WORLD</p><h3>唤醒世界之灵</h3><p>按全书大纲、第一卷大纲、世界法则、核心角色的顺序，逐块建立可编辑的创世档案。</p></div><button class="btn primary" data-action="generate-creation-journey">✦ 开启创世之旅</button></section>`;
+  return `<div class="creation-journey">
+    <div class="creation-progress-head"><div><span class="creation-orbit"><i></i><i></i><i></i></span><div><p class="eyebrow">4YI CREATION</p><h3>${progress.running?"创世推演中":"创世完成"}</h3></div></div><strong>${Math.round(completed.length/4*100)}%</strong></div>
+    <div class="creation-progress-track"><i style="width:${completed.length/4*100}%"></i></div>
+    <div class="creation-block-list">${CREATION_BLOCKS.map((block,index)=>{
+      const done=completed.includes(block.id), active=progress.running&&progress.active===index, locked=progress.running&&!done&&!active;
+      const collapsed=done&&Boolean(w.creationCollapsed?.[block.id]);
+      return `<article class="creation-block ${active?"active":done?"done":"locked"} ${collapsed?"collapsed":""}"><div class="creation-block-index"><b>${done?"✓":block.numeral}</b><i></i></div><div class="creation-block-body"><header><div><small>${block.subtitle}</small><h3>${block.title}</h3><p>${block.points.join(" · ")}</p></div><div class="creation-block-status"><span>${done?"已完成":active?"生成中…":"等待上一块"}</span>${done?`<button data-action="toggle-creation-block" data-creation-id="${block.id}" aria-expanded="${!collapsed}">${collapsed?"展开 ⌄":"收起 ⌃"}</button>`:""}</div></header>${active?`<div class="creation-thinking"><div><i></i><i></i><i></i><strong>正在构建${block.title}</strong></div><p>${block.points[(Date.now()/900|0)%block.points.length]}</p><em></em><em></em><em></em></div>`:done&&!collapsed?`<textarea data-creation-block="${block.id}">${escapeHtml(blocks[block.id]||"")}</textarea><footer><small>可直接编辑，后续 AI 将读取修改后的内容</small><button class="btn small" data-action="regenerate-creation-block" data-creation-id="${block.id}">↻ 重新生成</button></footer>`:""}</div></article>`;
+    }).join("")}</div>
+  </div>`;
+}
+
 function projectWizard() {
   const w = state.wizard;
   w.stylePack ||= "longform";
@@ -1542,7 +1928,7 @@ function projectWizard() {
         <div class="field"><label>作品名称 *</label><input id="wTitle" value="${escapeHtml(w.title || "")}" placeholder="例如：我在末日经营一家当铺" /></div>
         <div class="field"><label>目标平台</label><select id="wPlatform">${["番茄 / 七猫","起点男频","晋江女频","短剧 / 漫剧","自媒体连载","暂不确定"].map(v=>`<option ${w.platform===v?"selected":""}>${v}</option>`).join("")}</select></div>
         <div class="field"><label>情绪基调</label><select id="wTone">${["热血爽感","轻松搞笑","悬疑压迫","温暖治愈","暗黑史诗","甜宠拉扯"].map(v=>`<option ${w.tone===v?"selected":""}>${v}</option>`).join("")}</select></div>
-        <div class="field genre-field"><label>题材标签（1～4个）</label><div class="choice-grid compact">${genres.map(g=>`<button class="choice ${(w.genre||[]).includes(g)?"selected":""}" data-genre="${g}">${g}</button>`).join("")}</div></div>
+        <div class="field genre-field"><label>题材标签（1～4个）</label><div class="choice-grid compact">${genres.map(g=>`<button class="choice ${(w.genre||[]).includes(g)?"selected":""}" data-genre="${g}">${g}</button>`).join("")}${(w.genre||[]).filter(g=>!genres.includes(g)).map(g=>`<button class="choice selected" data-genre="${escapeHtml(g)}">${escapeHtml(g)}</button>`).join("")}</div></div>
       </section>
       <section class="style-status-strip">
         <div><i>✓</i><span>已启用风格包<strong>${escapeHtml(activePack.name)}</strong></span></div>
@@ -1582,15 +1968,7 @@ function projectWizard() {
       <div class="soul-tags"><strong>风格标签</strong>${[...(w.genre||[]),w.tone,stylePackById(w.stylePack).name].filter(Boolean).map((tag)=>`<span>${escapeHtml(tag)}</span>`).join("")}</div>
     </div>`;
   } else if (state.wizardStep === 3) {
-    body = `<div class="wizard-intro"><p class="eyebrow">03 · WORLD</p><h3>创世：建立世界可以长期运行的规则</h3><p>这里只锁定最底层的世界规则；后续写书时，新人物、势力、地点、道具和补充设定都可以继续进入设定百科。</p></div>
-      <div class="form-grid">
-        <div class="field"><label>时代与世界</label><select id="wEra">${["架空古代","现代都市","古代王朝","近未来","末日废土","星际文明","东方玄幻","西幻大陆"].map(v=>`<option ${w.era===v?"selected":""}>${v}</option>`).join("")}</select></div>
-        <div class="field"><label>视觉风格</label><select id="wVisual">${["东方志怪漫画","国风水墨漫画","日系动画","写实电影感","3D 动画","美式漫画","黑白电影分镜"].map(v=>`<option ${w.visualStyle===v?"selected":""}>${v}</option>`).join("")}</select></div>
-        <div class="field full"><label>世界核心规则 *</label><textarea id="wWorldRules" placeholder="例如：所有超凡力量都必须通过交易获得；系统不会直接说谎。">${escapeHtml(w.worldRules || "")}</textarea></div>
-        <div class="field full"><label>力量 / 社会体系</label><textarea id="wPowerSystem" placeholder="等级、资源、货币、职业、势力如何运行？">${escapeHtml(w.powerSystem || "")}</textarea></div>
-        <div class="field full"><label>关键势力与地点</label><textarea id="wFactions" placeholder="每行一个，例如：镇妖司｜维护长安秩序；妖市｜秘密交易场">${escapeHtml(w.factions || "")}</textarea></div>
-        <div class="field full"><label>不可修改的底层事实</label><textarea id="wLockedFacts" placeholder="每行一条，后续AI不得违反">${escapeHtml(w.lockedFacts || "")}</textarea></div>
-      </div>`;
+    body = `<div class="creation-intro"><div><p class="eyebrow">03 · CREATION</p><h3>创世：从全书蓝图到第一位核心角色</h3><p>四块内容严格依次生成，后一块会读取前一块的结果，确保大纲、法则和人物彼此一致。</p></div><span>全书大纲 → 第一卷大纲 → 世界法则 → 核心角色</span></div>${creationJourneyView(w)}`;
   } else if (state.wizardStep === 4) {
     body = `<div class="wizard-intro"><p class="eyebrow">04 · STRUCTURE</p><h3>决定故事骨架和作者参与程度</h3><p>先选择宏观结构，生成后仍可自由增加章、集和场景。</p></div>
       <div class="form-grid">
@@ -1615,7 +1993,7 @@ function projectWizard() {
   return `<div class="modal-backdrop"><div class="modal creation-wizard-modal">
     <div class="modal-head"><div><p class="eyebrow">STORY GENESIS</p><h2>五步建立一本能长期写下去的小说</h2></div><button class="btn small ghost" data-action="close-modal">✕</button></div>
     <div class="modal-body"><nav class="genesis-stepper">${steps.map(([cn,en],index)=>`<button class="${index+1===state.wizardStep?"active":index+1<state.wizardStep?"done":""}" data-wizard-jump="${index+1}" ${index+1>state.wizardStep?"disabled":""}><i>${index+1<state.wizardStep?"✓":index+1}</i><span>${cn}<small>${en}</small></span></button>`).join("")}</nav>${body}</div>
-    <div class="modal-foot"><button class="btn" data-action="wizard-back" ${state.wizardStep===1?"disabled":""}>上一步</button><div class="wizard-progress">${state.wizardStep} / 5</div><button class="btn primary" data-action="${state.wizardStep===5?"create-project":"wizard-next"}">${state.wizardStep===5?"创建项目并生成大纲 →":"保存并继续 →"}</button></div>
+    <div class="modal-foot"><button class="btn" data-action="wizard-back">${state.wizardStep===1?"← 返回作品立项":"上一步"}</button><div class="wizard-progress">${state.wizardStep} / 5</div><button class="btn primary" data-action="${state.wizardStep===5?"create-project":"wizard-next"}">${state.wizardStep===5?"创建项目并生成大纲 →":"保存并继续 →"}</button></div>
   </div></div>`;
 }
 
@@ -1682,14 +2060,14 @@ function aiDraftModal() {
     ["人物关系", "用对话、试探与误会推进人物关系，结尾用身份或立场反转收束。"]
   ];
   return `<div class="modal-backdrop"><div class="modal ai-config-modal">
-    <div class="modal-head"><div><p class="eyebrow">AI GHOSTWRITER</p><h2>AI 代写「${escapeHtml(c.title)}」</h2></div><button class="btn small ghost" data-action="close-modal">✕</button></div>
+    <div class="modal-head"><div><p class="eyebrow">AI GHOSTWRITER</p><h2>${state.view === "finalize" ? "生成定稿" : "AI 生成初稿"}「${escapeHtml(c.title)}」</h2></div><button class="btn small ghost" data-action="close-modal">✕</button></div>
     <div class="modal-body">
-      <div class="config-section"><label>本章目标字数</label><div class="segmented-options">${[1000,1500,2000,3000,5000].map(words => `<button class="choice ${state.aiDraftConfig.words===words?"selected":""}" data-draft-words="${words}">${words.toLocaleString()} 字</button>`).join("")}</div></div>
+      <div class="config-section"><label>本章目标字数 <small>允许 ±10%</small></label><div class="segmented-options">${[1000,1500,2000,3000,5000].map(words => `<button class="choice ${state.aiDraftConfig.words===words?"selected":""}" data-draft-words="${words}">${words.toLocaleString()} 字</button>`).join("")}</div><p class="word-range-hint">实际成稿区间：${Math.round(state.aiDraftConfig.words*.9).toLocaleString()}—${Math.round(state.aiDraftConfig.words*1.1).toLocaleString()} 字</p></div>
       <div class="config-section"><label>选择本章剧情方向</label><div class="direction-grid">${directions.map(([name,desc],i) => `<button class="direction-card ${state.aiDraftConfig.direction===name?"selected":""}" data-draft-direction="${name}"><span>方向 ${i+1}</span><strong>${name}</strong><p>${desc}</p></button>`).join("")}</div></div>
       <div class="field"><label>额外要求（选填）</label><textarea id="draftNote" placeholder="例如：本章不要出现新角色，结尾必须停在主角发现密室……">${escapeHtml(state.aiDraftConfig.note || "")}</textarea></div>
-      <div class="generation-context"><span>✓ 已读取锁定大纲</span><span>✓ 已读取 ${p.assets.length} 项资产</span><span>✓ 已读取前文摘要</span></div>
+      <div class="generation-context">${state.view === "finalize" ? `<span>✓ 已读取本章细纲</span><span>✓ 已读取4个场景规划</span>` : `<span>✓ 已读取创世四块内容</span>`}<span>✓ 已读取前文摘要</span></div>
     </div>
-    <div class="modal-foot"><button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="start-ai-draft">开始代写约 ${state.aiDraftConfig.words.toLocaleString()} 字 →</button></div>
+    <div class="modal-foot"><button class="btn" data-action="close-modal">取消</button><button class="btn primary" data-action="start-ai-draft">${state.view === "finalize" ? "生成定稿" : "生成初稿"} · ${Math.round(state.aiDraftConfig.words*.9).toLocaleString()}—${Math.round(state.aiDraftConfig.words*1.1).toLocaleString()} 字 →</button></div>
   </div></div>`;
 }
 
@@ -1736,6 +2114,8 @@ function render() {
     drafting: () => writingView("drafting"),
     encyclopedia: encyclopediaView,
     bible: bibleView,
+    style: styleView,
+    inspiration: inspirationView,
     finalize: () => writingView("finalize"),
     quick: quickView,
     assets: assetsView,
@@ -1746,6 +2126,89 @@ function render() {
 }
 
 function bind() {
+  $$("[data-book-idea]").forEach(el => el.onclick = () => { syncBookIdeaInputs(); state.bookIdea.selected = Number(el.dataset.bookIdea); render(); });
+  $$("[data-idea-multi]").forEach(el => el.onchange = () => {
+    const field = el.dataset.ideaMulti;
+    state.bookIdea[field + "Values"] = $$('[data-idea-multi="' + field + '"]:checked').map(item=>item.value);
+    syncBookIdeaInputs();
+    const summary = $('[data-idea-summary="' + field + '"]');
+    if (summary) summary.textContent = state.bookIdea[field] || ("请选择" + (field==="genre"?"题材":"风格"));
+    state.bookIdea.options = []; state.bookIdea.selected = -1;
+  });
+  $$("[data-idea-other]").forEach(el => el.oninput = () => {
+    const field = el.dataset.ideaOther;
+    state.bookIdea[field + "Other"] = el.value.trim();
+    syncBookIdeaInputs();
+    const summary = $('[data-idea-summary="' + field + '"]');
+    if (summary) summary.textContent = state.bookIdea[field] || ("请选择" + (field==="genre"?"题材":"风格"));
+    state.bookIdea.options = []; state.bookIdea.selected = -1;
+  });
+  const premiseInput = $("#ideaPremise");
+  if (premiseInput) premiseInput.oninput = () => {
+    state.bookIdea.premise = premiseInput.value;
+    state.bookIdea.premiseDemo = false;
+    state.bookIdea.options = []; state.bookIdea.selected = -1;
+  };
+  const setupTitle = $("#setupTitle");
+  if (setupTitle) setupTitle.oninput = () => {
+    state.wizard.title = setupTitle.value;
+    const coverTitle = $(".novel-cover-copy strong");
+    if (coverTitle) coverTitle.textContent = setupTitle.value.trim() || "未命名新书";
+  };
+  const setupSynopsis = $("#setupSynopsis");
+  if (setupSynopsis) setupSynopsis.oninput = () => {
+    state.wizard.logline = setupSynopsis.value;
+    if ($("#setupSynopsisCount")) $("#setupSynopsisCount").textContent = `${setupSynopsis.value.length} / 500`;
+  };
+  $("#setupCategory")?.addEventListener("change", syncBookSetupInputs);
+  $("#bookCoverUpload")?.addEventListener("change", (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (file.size > 4 * 1024 * 1024) return toast("封面图请控制在 4MB 以内");
+    const reader = new FileReader();
+    reader.onload = () => { state.wizard.coverImage = String(reader.result || ""); render(); toast("封面已上传"); };
+    reader.readAsDataURL(file);
+  });
+  $$('[data-creation-block]').forEach(el=>el.oninput=()=>{
+    state.wizard.creationBlocks ||= {};
+    state.wizard.creationBlocks[el.dataset.creationBlock] = el.value;
+    if (el.dataset.creationBlock === "worldRules") state.wizard.worldRules = el.value;
+  });
+  $$("[data-style-profile-field]").forEach((el) => el.oninput = () => { styleDraft()[el.dataset.styleProfileField] = el.value; });
+  $$("[data-style-rule-field]").forEach((el) => el.oninput = () => {
+    const rule = styleDraft().rules.find((item) => item.id === el.dataset.styleRuleId);
+    if (rule) rule[el.dataset.styleRuleField] = el.value;
+  });
+  $$("[data-style-rule-policy]").forEach((el) => el.onchange = () => {
+    const rule = styleDraft().rules.find((item) => item.id === el.dataset.styleRulePolicy);
+    if (rule) rule.policy = el.value;
+  });
+  $$("[data-style-rule-source]").forEach((el) => el.onclick = () => {
+    const rule = styleDraft().rules.find((item) => item.id === el.dataset.styleRuleId);
+    if (!rule) return;
+    rule.source = el.dataset.styleRuleSource;
+    if (rule.source === "template") {
+      const first = STYLE_MODULE_GROUPS.find((group) => group.id === rule.groupId)?.modules[0];
+      rule.templateId = rule.templateId || first?.[0] || "";
+      rule.content = STYLE_RULE_TEMPLATES[rule.templateId] || "";
+    }
+    render();
+  });
+  $$("[data-style-rule-template]").forEach((el) => el.onchange = () => {
+    const rule = styleDraft().rules.find((item) => item.id === el.dataset.styleRuleTemplate);
+    if (!rule) return;
+    rule.templateId = el.value;
+    rule.title = STYLE_MODULE_GROUPS.flatMap((group) => group.modules).find(([id]) => id === el.value)?.[1] || rule.title;
+    rule.content = STYLE_RULE_TEMPLATES[el.value] || "";
+    render();
+  });
+  const bookSearchInput = $("#bookSearchInput");
+  if (bookSearchInput) bookSearchInput.oninput = () => {
+    state.bookSearch = bookSearchInput.value;
+    $("#bookSearchResults").innerHTML = bookSearchResults(state.bookSearch);
+    bindBookSearchResults();
+  };
+  bindBookSearchResults();
   $$("[data-view]").forEach((el) => el.onclick = () => {
     if (el.dataset.view === "projects") {
       saveEditor();
@@ -1771,10 +2234,11 @@ function bind() {
   });
   $$("[data-open-project]").forEach((el) => el.onclick = () => {
     state.projectId = el.dataset.openProject;
-    state.chapterId = project().chapters[0]?.id;
+    const next = projectNextStep(project());
+    state.chapterId = next.chapterId;
     state.aiResult = "";
     state.pendingAssets = [];
-    state.view = project().outline ? "drafting" : "outline";
+    state.view = next.view;
     render();
   });
   $$("[data-action]").forEach((el) => el.onclick = (event) => { event.stopPropagation(); action(el.dataset.action, el); });
@@ -1784,6 +2248,8 @@ function bind() {
   $$("[data-asset-focus]").forEach((el) => el.onclick = () => { state.assetFocusId = el.dataset.assetFocus; render(); });
   $$("[data-asset-search]").forEach((el) => el.oninput = () => { state.assetSearch = el.value; state.assetFocusId = null; render(); });
   $$("[data-entity-tab]").forEach((el) => el.onclick = () => { state.entityTab = el.dataset.entityTab; render(); });
+  $$("[data-entity-list-tab]").forEach((el) => el.onclick = () => { state.entityListTab = el.dataset.entityListTab; render(); });
+  $$("[data-entity-folder]").forEach((el) => el.onclick = () => { state.entityFolderFilter = el.dataset.entityFolder || null; render(); });
   $$("[data-entity-focus]").forEach((el) => el.onclick = () => { state.entityFocusId = el.dataset.entityFocus; render(); });
   $$("[data-entity-search]").forEach((el) => el.oninput = () => { state.entitySearch = el.value; render(); });
   $$("[data-memory-tab]").forEach((el) => el.onclick = () => { state.memoryTab = el.dataset.memoryTab; render(); });
@@ -1804,6 +2270,8 @@ function bind() {
     b.characterStates[el.dataset.characterState][el.dataset.stateField] = el.value;
     save();
   });
+  const fineOutlineInput = $("#chapterFineOutline");
+  if (fineOutlineInput) fineOutlineInput.oninput = () => { chapter().fineOutline = fineOutlineInput.value; chapter().updatedAt = Date.now(); save(); };
   $$("[data-task-field]").forEach((el) => el.oninput = () => {
     const field = el.dataset.taskField;
     chapter().taskCard[field] = ["requiredEvents","requiredCharacters","forbidden"].includes(field)
@@ -2009,6 +2477,19 @@ function bind() {
   $("#projectImport")?.addEventListener("change", importProjectFile);
 }
 
+function bindBookSearchResults() {
+  $$("[data-search-view]").forEach((el) => el.onclick = () => {
+    saveEditor();
+    state.view = el.dataset.searchView;
+    if (state.view === "drafting") state.chapterId = el.dataset.searchId;
+    if (state.view === "encyclopedia") { state.entityTab = "all"; state.entitySearch = ""; state.entityFocusId = el.dataset.searchId; }
+    if (state.view === "bible") state.memoryTab = "all";
+    if (state.view === "assets") { state.assetTab = "all"; state.assetSearch = ""; state.assetFocusId = el.dataset.searchId; }
+    state.modal = null;
+    render();
+  });
+}
+
 let saveTimer;
 function debounceSave() { clearTimeout(saveTimer); saveTimer = setTimeout(saveEditor, 500); }
 function saveEditor() {
@@ -2054,12 +2535,101 @@ function collectWizardStep() {
     if (!w.title) return toast("先给故事起一个名字"), false;
     if (!w.genre?.length) return toast("至少选择一个题材标签"), false;
   }
-  if (state.wizardStep === 3 && !w.worldRules) return toast("请先写下一条世界核心规则"), false;
+  if (state.wizardStep === 3 && CREATION_BLOCKS.some(block=>!w.creationBlocks?.[block.id]?.trim())) return toast("请先完成四块创世档案"), false;
   return true;
 }
 
 function action(name, source) {
-  if (name === "new-project") { state.modal = "project"; state.wizardStep = 1; state.wizard = { genre: [] }; return render(); }
+  if (name === "add-style-rule") {
+    const group = STYLE_MODULE_GROUPS.find((item) => item.id === source?.dataset.styleGroupId);
+    if (!group) return;
+    styleDraft().rules.push({ id: uid(), groupId: group.id, title: "新规则", content: "", source: "custom", templateId: "", policy: "auto" });
+    render(); return;
+  }
+  if (name === "remove-style-rule") {
+    styleDraft().rules = styleDraft().rules.filter((rule) => rule.id !== source?.dataset.styleRuleId);
+    render(); return;
+  }
+  if (name === "cancel-style") {
+    state.styleDraft = structuredClone(project().styleProfile);
+    render(); return toast("已放弃未保存的风格修改");
+  }
+  if (name === "save-style") {
+    const draft = styleDraft();
+    if (!draft.name.trim()) return toast("请填写风格包名称");
+    if (draft.rules.some((rule) => !rule.title.trim() || (rule.policy !== "ignore" && !rule.content.trim()))) return toast("请补全参与 AI 的规则名称和内容");
+    project().styleProfile = structuredClone(draft);
+    project().updatedAt = Date.now();
+    save();
+    render(); return toast("风格包已保存，后续 AI 写作会使用新规则");
+  }
+  if (name === "add-inspiration") {
+    const note = $("#ideaInput")?.value.trim();
+    if (!note) return toast("先写下一条灵感");
+    project().inspirationNotes.push({ id: uid(), text: note, createdAt: Date.now() });
+    save(); render(); return toast("灵感已记下");
+  }
+  if (name === "use-inspiration") {
+    const note = project()?.inspirationNotes.find((item) => item.id === source?.dataset.ideaId);
+    const current = chapter();
+    if (!note || !current) return;
+    current.taskCard.goal = [current.taskCard.goal, note.text].filter(Boolean).join("\n");
+    save();
+    state.view = "drafting";
+    render();
+    return toast("已加入当前章节任务，可继续修改");
+  }
+  if (name === "open-book-search") {
+    if (!project()) return toast("请先打开一本作品");
+    saveEditor();
+    state.bookSearch = "";
+    state.modal = "book-search";
+    render();
+    $("#bookSearchInput")?.focus();
+    return;
+  }
+  if (name === "new-project") { state.modal = "book-ideas"; state.bookIdea = { genre:"", style:"", genreValues:[], styleValues:[], genreOther:"", styleOther:"", premise:"", options:[], selected:-1, demo:false, premiseSerial:0, premiseDemo:false }; return render(); }
+  if (name === "generate-core-premise") return generateCorePremise();
+  if (name === "generate-book-ideas") return generateBookIdeas();
+  if (name === "manual-book-wizard") { state.modal = "book-setup"; state.wizardStep = 1; state.wizard = { genre: [], coverTheme: "ember", coverImage: "" }; return render(); }
+  if (name === "select-book-idea") {
+    const idea = state.bookIdea, selected = idea.options[idea.selected];
+    if (!selected) return toast("请先选择一个方向");
+    const selectedGenres = [...(idea.genreValues || []), idea.genreOther || ""].filter(Boolean).map(item=>item==="修真"?"修仙":item).slice(0,4);
+    const tone = /搞笑|幽默|轻松/.test(idea.style) ? "轻松搞笑" : /悬疑|惊悚/.test(idea.style) ? "悬疑压迫" : /治愈|温暖/.test(idea.style) ? "温暖治愈" : "热血爽感";
+    state.wizard = { genre: selectedGenres.length ? selectedGenres : ["待探索"], title: selected.title, logline: selected.summary,
+      coreConflict: selected.conflict || selected.summary, powerMechanism: selected.mechanism || "",
+      tone, platform: idea.selected===0 ? "番茄 / 七猫" : idea.selected===1 ? "起点男频" : "暂不确定",
+      ideaRoute: BOOK_IDEA_ROUTES[idea.selected].id, ideaSeed: idea.premise, ideaStyle: idea.style };
+    state.wizard.coverTheme = BOOK_COVER_THEMES[idea.selected % BOOK_COVER_THEMES.length].id;
+    state.wizard.coverImage = "";
+    state.wizardStep = 1; state.modal = "book-setup"; return render();
+  }
+  if (name === "back-book-ideas") { syncBookSetupInputs(); state.modal = "book-ideas"; return render(); }
+  if (name === "upload-book-cover") { $("#bookCoverUpload")?.click(); return; }
+  if (name === "generate-book-cover") {
+    syncBookSetupInputs();
+    state.bookSetupCoverSerial = (state.bookSetupCoverSerial + 1) % BOOK_COVER_THEMES.length;
+    state.wizard.coverTheme = BOOK_COVER_THEMES[state.bookSetupCoverSerial].id;
+    state.wizard.coverImage = "";
+    render(); return toast("已换一种封面概念");
+  }
+  if (name === "enter-book-wizard") {
+    syncBookSetupInputs();
+    if (!state.wizard.title) return toast("先填写书名");
+    if (!state.wizard.genre?.length) return toast("先选择主分类");
+    if (!state.wizard.logline) return toast("先填写作品简介");
+    state.wizardStep = 1; state.modal = "project"; return render();
+  }
+  if (name === "generate-creation-journey") return generateCreationJourney();
+  if (name === "regenerate-creation-block") return regenerateCreationBlock(source?.dataset.creationId);
+  if (name === "toggle-creation-block") {
+    const id=source?.dataset.creationId;
+    if(!CREATION_BLOCKS.some(block=>block.id===id)) return;
+    state.wizard.creationCollapsed ||= {};
+    state.wizard.creationCollapsed[id]=!state.wizard.creationCollapsed[id];
+    return render();
+  }
   if (name === "delete-project") { state.deleteProjectId = source?.dataset.projectId; state.modal = "delete-project"; return render(); }
   if (name === "confirm-delete-project") return moveProjectToTrash();
   if (name === "open-trash") { state.modal = "trash"; return render(); }
@@ -2122,14 +2692,27 @@ function action(name, source) {
   }
   if (name === "apply-outline-expand") return applyOutlineExpand();
   if (name === "open-ai-draft") { state.modal = "ai-draft"; state.aiDraftConfig = { words: 1500, direction: "强冲突推进", note: "" }; return render(); }
+  if (name === "generate-final-draft") {
+    const p = project(), c = chapter();
+    const field = $("#chapterFineOutline");
+    if (field) c.fineOutline = field.value.trim();
+    if (c.scenes.length !== 4) generateScenes();
+    state.modal = "ai-draft"; state.aiDraftConfig = { words: 1500, direction: "强冲突推进", note: "" }; return render(); }
   if (name === "start-ai-draft") {
+    if (state.view === "finalize" && chapter()?.scenes.length !== 4) generateScenes();
+    const fineOutlineField = $("#chapterFineOutline");
+    if (fineOutlineField && chapter()) chapter().fineOutline = fineOutlineField.value.trim();
     state.aiDraftConfig.note = $("#draftNote")?.value.trim() || "";
     state.modal = null;
     render();
     return runAI("draft");
   }
   if (name === "wizard-next") { if (collectWizardStep()) { state.wizardStep = Math.min(5, state.wizardStep + 1); render(); } return; }
-  if (name === "wizard-back") { syncWizardInputs(); state.wizardStep = Math.max(1, state.wizardStep - 1); return render(); }
+  if (name === "wizard-back") {
+    syncWizardInputs();
+    if (state.wizardStep === 1) { state.modal = "book-setup"; return render(); }
+    state.wizardStep = Math.max(1, state.wizardStep - 1); return render();
+  }
   if (name === "regenerate-soul-cards") return regenerateSoulCards();
   if (name === "rewrite-soul-card") return rewriteSoulCard(source?.dataset.soulCardId);
   if (name === "create-project") return createProject();
@@ -2160,6 +2743,39 @@ function action(name, source) {
   if (name === "create-asset") return createAsset();
   if (name === "sync-assets-entities") return syncAssetsToEntities(true);
   if (name === "new-entity") { state.entityEditId = null; state.modal = "entity"; return render(); }
+  if (name === "new-entity-folder") {
+    const label = prompt("新分组名称");
+    if (!label?.trim()) return;
+    const p = project();
+    p.entityFolders ||= [];
+    const folder = { id: uid(), name: label.trim() };
+    p.entityFolders.push(folder);
+    state.entityFolderFilter = folder.id;
+    save(); return render();
+  }
+  if (name === "rename-entity-folder") {
+    const p = project(), folder = (p.entityFolders||[]).find(item=>item.id===state.entityFolderFilter);
+    if (!folder) return;
+    const label = prompt("分组名称", folder.name);
+    if (!label?.trim()) return;
+    folder.name = label.trim(); save(); return render();
+  }
+  if (name === "delete-entity-folder") {
+    const p = project(), id = state.entityFolderFilter;
+    const folder = (p.entityFolders||[]).find(item=>item.id===id);
+    if (!folder || !confirm(`删除分组「${folder.name}」？其中设定会转入未分组。`)) return;
+    p.entities.filter(item=>item.folderId===id).forEach(item=>item.folderId=null);
+    p.entityFolders = p.entityFolders.filter(item=>item.id!==id);
+    state.entityFolderFilter = null; save(); return render();
+  }
+  if (name === "delete-entity") {
+    const p = project(), id = source?.dataset.entityId;
+    const entity = p.entities.find(item=>item.id===id);
+    if (!entity || !confirm(`删除设定「${entity.name}」？`)) return;
+    p.entities = p.entities.filter(item=>item.id!==id);
+    state.entityFocusId = null;
+    save(); return render();
+  }
   if (name === "edit-entity") { state.entityEditId = source?.dataset.entityId; state.modal = "entity"; return render(); }
   if (name === "entity-asset-prompt") return openEntityAssetPrompt(source?.dataset.entityId);
   if (name === "save-entity") return saveEntity();
@@ -2194,7 +2810,7 @@ function action(name, source) {
     c.status = "修改中";
     c.hasUnpublishedChanges = true;
     c.updatedAt = Date.now();
-    save(); render(); return toast("本章已解锁；修改后请重新确认初写或定稿");
+    save(); render(); return toast("本章已解锁；修改后请重新确认初稿或定稿");
   }
   if (name === "add-pending-asset") return addPendingAsset();
   if (name === "save-extracted-assets") return saveExtractedAssets();
@@ -2448,14 +3064,124 @@ function quickConfigText(q = quickWriting()) {
 其他要求：${quickTextValue(c.other) || "无"}`;
 }
 
-async function aiQuickText(prompt, temperature = 0.75) {
+async function aiQuickText(prompt, temperature = 0.75, maxTokens = 0) {
   const response = await fetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt, temperature })
+    body: JSON.stringify({ prompt, temperature, ...(maxTokens ? { maxTokens } : {}) })
   }).then((res) => res.json());
   if (response.error) throw new Error(response.error);
   return response.demo ? "" : (response.content || "").trim();
+}
+
+function syncBookIdeaInputs() {
+  const idea = state.bookIdea;
+  idea.genre = [...(idea.genreValues || []), idea.genreOther || ""].filter(Boolean).join("、");
+  idea.style = [...(idea.styleValues || []), idea.styleOther || ""].filter(Boolean).join("、");
+  idea.premise = $("#ideaPremise")?.value.trim() ?? idea.premise;
+}
+
+function localCorePremise(idea) {
+  const genre = idea.genre || "架空世界";
+  const style = idea.style || "强冲突";
+  const samples = [
+    "在" + genre + "世界里，主角一直被当成最没用的人，却能把别人丢弃的失败经历炼成新能力。开局他捡走宿敌的一次惨败，发现其中藏着足以推翻现有秩序的证据；能力越强，他也越可能继承失败者留下的代价。整体采用" + style + "风格。",
+    "主角在" + genre + "世界经营一家只在午夜出现的小店，客人可以用最珍贵的记忆交换愿望。开局第一位客人竟是三天后的主角本人，他要求现在的自己绝不能完成一笔即将上门的交易；故事以" + style + "风格展开。",
+    "所有人都以为主角依靠一种稀有能力崛起，只有他知道那份力量每天都会篡改一条世界规则。开局他赢下第一次胜利后，最亲近的人却不再记得他的名字；他必须利用规则反击，同时阻止自己被世界彻底删除，保持" + style + "的叙事气质。",
+    "在" + genre + "世界，主角能提前看见每个选择最坏的结果，却从来不知道哪条路能赢。开局全城都认定他制造了一场灾难，他只能故意选择看似最糟的方案，把真正的幕后者逼入更坏的结局；故事强调" + style + "与连续反转。"
+  ];
+  return samples[(Math.max(1, idea.premiseSerial) - 1) % samples.length];
+}
+
+async function generateCorePremise() {
+  syncBookIdeaInputs();
+  const idea = state.bookIdea;
+  const previous = idea.premise.trim();
+  idea.premiseSerial = Number(idea.premiseSerial || 0) + 1;
+  const prompt = [
+    "你是中文网文立项编辑。生成一个可以支撑长篇连载的原创核心脑洞。",
+    "题材：" + (idea.genre || "不限") + "；风格：" + (idea.style || "强冲突、有追读感") + "。",
+    "必须在一段话内写清：主角初始处境、独特机制、开局冲突、能力限制或代价、长线悬念。控制在100至180字，不要写书名、标题、分析或项目符号，不要照抄现成作品。",
+    previous ? "作者不满意上一版，必须更换主角身份、核心机制和开局事件，不能只换词。上一版：" + previous : "",
+    "仅输出核心脑洞正文。"
+  ].filter(Boolean).join("\n");
+  startBookIdeaProgress("core");
+  try {
+    const raw = await aiQuickText(prompt, 0.92);
+    idea.premise = (raw || localCorePremise(idea)).replace(/^["“]|["”]$/g, "").trim();
+    idea.premiseDemo = !raw;
+    idea.options = [];
+    idea.selected = -1;
+    idea.demo = false;
+    if (!raw) toast(previous ? "已换一条本地脑洞示例" : "已生成本地脑洞示例");
+  } catch (error) {
+    toast("脑洞生成失败：" + error.message + "。你可以再次刷新或手动填写。");
+  } finally {
+    await keepBookIdeaProgressVisible(2700);
+    stopBookIdeaProgress();
+    render();
+  }
+}
+
+function localBookIdeaOptions(idea) {
+  const genre = idea.genre || "新故事";
+  const premise = idea.premise.replace(/[。！？!?]+$/, "");
+  const tone = idea.style || "你选定的风格";
+  return [
+    { title: `${genre}：开局就要翻盘`, summary: `从“${premise}”开场，第一章立刻让主角遭遇公开失利，并在同一场冲突里展示反击能力。故事按“受压—行动—结果—更大麻烦”推进，每次胜利都留下下一章必须解决的具体问题；整体保持${tone}。`, mechanism:"即时兑现核心能力，章节以冲突和追读钩子驱动", conflict:"主角必须在公开失利后迅速扭转局面，反击又招来更强的对手。" },
+    { title: `${genre}：从起点改写规则`, summary: `保留“${premise}”的核心，但把能力拆成触发条件、限制、代价与升级阶梯。前期解决生存问题，中期卷入势力竞争，后期发现能力与世界秩序的关系，让同一个矛盾支撑长篇成长；人物关系和${tone}语气贯穿其中。`, mechanism:"能力规则与代价逐层展开，适合长线成长", conflict:"主角每次使用能力都会换来新的代价，并逐步触碰世界规则。" },
+    { title: `${genre}：真正的规则另有其人`, summary: `先让读者相信“${premise}”，随后在开局安排一件无法用原设定解释的事件：主角以为自己掌握了规则，却发现规则也在利用自己。爽点来自一次次反向验证与身份翻转，同时保持${tone}，把“真相究竟是什么”变成持续追读的悬念。`, mechanism:"反转原始机制，以规则真相推动悬念", conflict:"主角依赖的能力可能是陷阱，必须在获利与查清真相之间选择。" }
+  ];
+}
+
+function parseBookIdeaOptions(raw) {
+  const clean = String(raw || "").replace(/^```(?:json)?\s*|\s*```$/g, "").trim();
+  let data;
+  try { data = JSON.parse(clean); }
+  catch {
+    const match = clean.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error("推演结果不是可读取的 JSON");
+    data = JSON.parse(match[0]);
+  }
+  const options = Array.isArray(data) ? data : data.options;
+  if (!Array.isArray(options) || options.length !== 3
+    || options.some(item => !String(item?.title || "").trim() || !String(item?.summary || "").trim())) {
+    throw new Error("推演结果缺少三条完整方案");
+  }
+  return options.map(item => ({
+    title:String(item.title).trim().slice(0, 90),
+    summary:String(item.summary).trim().slice(0, 1000),
+    mechanism:String(item.mechanism || "").trim().slice(0, 300),
+    conflict:String(item.conflict || "").trim().slice(0, 300)
+  }));
+}
+
+async function generateBookIdeas() {
+  syncBookIdeaInputs();
+  const idea = state.bookIdea;
+  if (!idea.premise) return toast("先写下核心脑洞");
+  const previous = idea.options.map(item => item.title).join("；");
+  const prompt = `你是中文网文立项编辑。根据作者输入生成恰好三条真正不同的新书方向，不要照抄任何现成作品。
+题材：${idea.genre || "由内容判断"}；风格：${idea.style || "由内容判断"}；核心脑洞：${idea.premise}
+方向1：高钩子快节奏。开局兑现卖点，冲突与爽点清晰。
+方向2：长线成长。能力机制、限制、代价和势力升级能支撑长篇。
+方向3：差异化脑洞。改变对核心机制的理解，有意外但合理的反转。
+三条方案的主角身份、开局冲突、能力机制、爽点路径、情绪、长线展开必须明显不同。保留作者的核心脑洞，不要只改标题。
+${previous ? `上一轮标题：${previous}。本轮不要重复或仅改同义词。` : ""}
+仅输出合法 JSON，不要 Markdown：{"options":[{"title":"书名","summary":"100-220字具体梗概","mechanism":"核心机制一句话","conflict":"长线核心冲突一句话"},{"title":"...","summary":"...","mechanism":"...","conflict":"..."},{"title":"...","summary":"...","mechanism":"...","conflict":"..."}]}`;
+  startBookIdeaProgress("routes");
+  try {
+    const raw = await aiQuickText(prompt, 0.85);
+    idea.options = raw ? parseBookIdeaOptions(raw) : localBookIdeaOptions(idea);
+    idea.demo = !raw;
+    idea.selected = -1;
+    if (!raw) toast("当前为演示模式，已生成三条本地结构示例");
+  } catch (error) {
+    toast(`推演失败：${error.message}。请重试或手动建书。`);
+  } finally {
+    await keepBookIdeaProgressVisible(4600);
+    stopBookIdeaProgress(); render();
+  }
 }
 
 function quickVariantInstruction(q, scope, previous = "") {
@@ -3244,6 +3970,7 @@ function createProject() {
     id: uid(), title: w.title, logline: w.logline || `${origin || "主角"}来到${w.era}，卷入${w.coreConflict || "一场无法回头的命运"}。`,
     genre: w.genre?.length ? w.genre : ["待探索"], era: w.era, tone: w.tone || "轻松紧张", pov: w.pov,
     platform: w.platform, targetWords: w.targetWords, chapterWords: w.chapterWords, visualStyle: w.visualStyle,
+    coverImage: w.coverImage || "", coverTheme: w.coverTheme || "ember",
     storyboardStyle: "手绘电影风", progress: 1, updatedAt: Date.now(),
     genesis: {
       creationMode: w.creationMode || "guided", origin, travelGroup, abilityType,
@@ -3256,7 +3983,9 @@ function createProject() {
       powerConflict: hasGoldfinger(w) ? w.powerConflict : "",
       powerSystem: w.powerSystem, factions: w.factions, structure: w.structure, actCount: w.actCount,
       chaptersPerAct: w.chaptersPerAct, ending: w.ending, stylePack: w.stylePack,
-      styleModules: w.styleModules || [], soulCards: w.soulCards || buildSoulCards(w)
+      ideaRoute: w.ideaRoute || null, ideaSeed: w.ideaSeed || "", ideaStyle: w.ideaStyle || "",
+      styleModules: w.styleModules || [], soulCards: w.soulCards || buildSoulCards(w),
+      creationBlocks: structuredClone(w.creationBlocks || {})
     },
     bible: {
       rules: w.worldRules || "",
@@ -3709,6 +4438,13 @@ function saveEntity() {
     status: $("#entityStatus").value,
     name,
     summary,
+    content: $("#entityContent")?.value.trim() || "",
+    role: $("#entityRole")?.value || "ordinary",
+    scope: $("#entityScope")?.value || "manual",
+    keyFacts: ($("#entityKeyFacts")?.value || "").split(/\n+/).map(x=>x.trim()).filter(Boolean),
+    attributes: ($("#entityAttributes")?.value || "").split(/\n+/).map(x=>x.trim()).filter(Boolean),
+    folderId: $("#entityFolder")?.value || null,
+    volumeId: $("#entityVolume")?.value || null,
     aliases: ($("#entityAliases")?.value || "").split(/[、,，\n]+/).map((x) => x.trim()).filter(Boolean),
     relations: ($("#entityRelations")?.value || "").split(/\n+/).map((x) => x.trim()).filter(Boolean),
     firstChapterId: $("#entityFirstChapter")?.value || null,
@@ -3716,6 +4452,10 @@ function saveEntity() {
   });
   if (current) Object.assign(current, next);
   else p.entities.push(next);
+  state.entityFocusId = next.id;
+  state.entityFolderFilter = null;
+  state.entityTab = "all";
+  state.entityListTab = "all";
   state.entityEditId = null;
   state.modal = null;
   save(); render(); toast("设定已保存");
@@ -3766,14 +4506,17 @@ function addScene() {
 
 function generateScenes() {
   const c = chapter();
+  const p = project();
+  const fine = chapterFineOutline(p, c);
   const task = c.taskCard || {};
-  const people = task.requiredCharacters?.join("、") || project().entities.filter((x) => x.type === "character").slice(0, 2).map((x) => x.name).join("、") || "主角";
-  const target = project().chapterWords || state.aiDraftConfig.words || 2000;
+  const people = task.requiredCharacters?.join("、") || p.entities.filter((x) => x.type === "character").slice(0, 2).map((x) => x.name).join("、") || "主角";
+  const target = p.chapterWords || state.aiDraftConfig.words || 2000;
+  const outlineLines = fine.split(/\n+/).map((line) => line.trim()).filter(Boolean);
   c.scenes = [
-    normalizeScene({ title: "开场钩子", summary: `${people}进入本章核心处境，立即暴露异常或威胁。`, beat: "开场", tension: 3, targetWords: Math.round(target * .2) }, 0),
-    normalizeScene({ title: "目标受阻", summary: task.goal || "主角尝试推进目标，但关键阻力出现。", beat: "冲突", tension: 4, targetWords: Math.round(target * .3) }, 1),
-    normalizeScene({ title: "信息反转", summary: (task.requiredEvents || [])[0] || "新的证据改变人物对局势的理解。", beat: "反转", tension: 5, targetWords: Math.round(target * .3) }, 2),
-    normalizeScene({ title: "悬念收束", summary: task.hook || "以未解决的危险或新问题结束本章。", beat: "收束", tension: 4, targetWords: Math.round(target * .2) }, 3)
+    normalizeScene({ title: "开场钩子", summary: `${people}进入细纲规定的开局处境：${outlineLines[0] || c.title}。用异常、威胁或目标立刻抓住读者。`, beat: "开场", tension: 3, targetWords: Math.round(target * .2) }, 0),
+    normalizeScene({ title: "行动与阻力", summary: outlineLines[1] || task.goal || "主角围绕细纲目标采取行动，阻力升级并产生明确后果。", beat: "冲突", tension: 4, targetWords: Math.round(target * .3) }, 1),
+    normalizeScene({ title: "关键转折", summary: outlineLines[2] || (task.requiredEvents || [])[0] || "落实细纲中的关键事件，让新信息改变人物对局势的判断。", beat: "反转", tension: 5, targetWords: Math.round(target * .3) }, 2),
+    normalizeScene({ title: "结果与钩子", summary: outlineLines.slice(3).join("；") || task.hook || "完成本章阶段结果，以细纲规定的悬念衔接下一章。", beat: "收束", tension: 4, targetWords: Math.round(target * .2) }, 3)
   ];
   c.updatedAt = Date.now();
   save(); render(); toast("已生成4个可编辑场景；锁定满意场景后再交给AI写作");
@@ -3844,9 +4587,31 @@ function activeMemoriesBeforeChapter(p, c) {
   );
 }
 
+function styleRulesForPrompt(p, taskType) {
+  const applicable = taskType === "logic" ? new Set(["structure", "character", "quality"])
+    : taskType === "summary" ? new Set(["structure", "character", "quality"])
+    : new Set(["voice", "dialogue", "structure", "character"]);
+  return (p.styleProfile?.rules || [])
+    .filter((rule) => rule.content?.trim() && (rule.policy === "force" || (rule.policy === "auto" && applicable.has(rule.groupId))))
+    .map((rule) => `- [${STYLE_MODULE_GROUPS.find((group) => group.id === rule.groupId)?.name || "其他"} / ${rule.policy === "force" ? "强制" : "按需"}] ${rule.title}：${rule.content.trim()}`)
+    .join("\n") || "暂无";
+}
+
+function entitiesForPrompt(p, c) {
+  const taskText = [c.title, c.taskCard?.goal, ...(c.taskCard?.requiredCharacters || []), ...(c.taskCard?.requiredEvents || [])].join(" ");
+  return p.entities.filter((entity) => {
+    if (entity.status !== "confirmed" || entity.scope === "off") return false;
+    if (entity.scope === "global") return true;
+    if (entity.scope === "manual") return taskText.includes(entity.name);
+    return entity.scope === "volume" && p.volumes.some(volume => volume.id === entity.volumeId && volume.chapterIds.includes(c.id));
+  })
+    .slice(0, 24)
+    .map(entity => `${entity.name}[${ENTITY_TYPE_LABELS[entity.type] || entity.type}]：${entity.summary}；关键事实：${entity.keyFacts.slice(0, 5).join("、") || "暂无"}；档案：${entity.content.slice(0, 500) || "暂无"}`);
+}
+
 function buildPrompt(type, p, c) {
   const instructions = {
-    draft: `根据已锁定故事总纲、当前分集标题和已确认设定，直接创作本集完整初稿。目标约${state.aiDraftConfig.words}字；为了保证情节、情绪和段落收束完整，可以自然增加到目标字数的120%～125%，不要为了卡字数硬截断。选定方向：${state.aiDraftConfig.direction}。额外要求：${state.aiDraftConfig.note || "无"}。开篇立即进入冲突，每3秒一个小冲突，每15秒一个反转，结尾留下强悬念。`,
+    draft: `根据已锁定故事总纲、当前分集标题和已确认设定，直接创作本集完整初稿。目标约${state.aiDraftConfig.words}字；为了保证情节、情绪和段落收束完整，可以自然增加到目标字数的120%～125%，不要为了卡字数硬截断。选定方向：${state.aiDraftConfig.direction}。额外要求：${state.aiDraftConfig.note || "无"}。具体节奏与语言遵循本书保存的风格规则。`,
     continue: "续写当前章节约500字。延续语气和节奏，制造一个新冲突，并在结尾留下钩子。",
     polish: "润色当前正文，保留事件和信息不变，使语言更流畅、画面更具体。输出完整润色稿。",
     expand: "扩写当前正文，补充动作、环境和人物反应，但不要水字数。输出扩写后的完整正文。",
@@ -3855,7 +4620,7 @@ function buildPrompt(type, p, c) {
     summary: "生成不超过150字的章节摘要，并列出本章新增人物、道具、地点、伏笔和角色状态变化。"
   };
   const relevantMemories = activeMemoriesBeforeChapter(p, c);
-  const staticEntities = p.entities.map((entity) => `${entity.name}[${entity.type}]：${entity.summary}`).join("；") || "暂无";
+  const staticEntities = entitiesForPrompt(p, c).join("\n") || "暂无";
   const scenePlan = c.scenes.length
     ? c.scenes.map((scene, index) => `${index + 1}.${scene.title}[${scene.beat}/张力${scene.tension}/约${scene.targetWords}字]：${scene.summary}`).join("\n")
     : "暂无，按章节任务卡自行规划";
@@ -3877,14 +4642,15 @@ function buildPrompt(type, p, c) {
 2. 没有设定的部分可以自由发挥，但必须服务当前章节目标，不能凭空引入会破坏后续主线的大设定。
 3. 新出现的人物必须使用未在本项目出现过的新姓名；不得复用已有角色名，也不要反复使用顾临川、闻昭、沈砚、许知意这类模板名。
 4. 正文要有连续因果：人物先有动机，再有行动，再有后果；每个转折要能从前文找到理由。
-5. 人物说话要区分口吻，少用空泛解释，多用动作、表情、停顿、环境压力传达情绪。
-6. 避免AI腔、模板腔、总结腔；不要写“他知道一切才刚刚开始”这类泛化句，章末钩子必须落到具体危险、证据或选择上。
-7. 除非任务要求，输出不要附带解释、标题、分析或项目符号。
+5. 语言、对白、节奏和钩子遵循下方本书风格规则；被忽略的规则不得通过旧预设重新加入。
+6. 除非任务要求，输出不要附带解释、标题、分析或项目符号。
 
 项目：${p.title}
 题材：${p.genre.join("、")}
 目标平台与基调：${p.platform || "未指定"}；${p.tone || "未指定"}
-作品风格包：${stylePackById(p.genesis?.stylePack).name}；启用规则模块=${(p.genesis?.styleModules || []).map((id)=>STYLE_MODULE_GROUPS.flatMap((group)=>group.modules).find(([moduleId])=>moduleId===id)?.[1] || id).join("、") || "暂无"}
+作品风格包：${p.styleProfile?.name || stylePackById(p.genesis?.stylePack).name}
+本次生效的风格规则（逐条执行，不要在输出中复述规则）：
+${styleRulesForPrompt(p, type)}
 一句话故事：${p.logline}
 创世核心：主角来源=${p.genesis?.origin || "未指定"}；穿越组合=${p.genesis?.travelGroup || "未指定"}；核心能力=${p.genesis?.abilityType || "未指定"}；能力代价=${p.genesis?.abilityCost || "未指定"}；核心命题=${p.genesis?.coreTheme || "未指定"}；情感内核=${p.genesis?.emotionalCore || "未指定"}；核心冲突=${p.genesis?.coreConflict || "未指定"}；阶段目标=${p.genesis?.heroGoal || "未指定"}；深层欲望=${p.genesis?.deepDesire || "未指定"}；真正需要=${p.genesis?.trueNeed || "未指定"}；最终选择=${p.genesis?.finalChoice || "未指定"}；失败代价=${p.genesis?.stakes || "未指定"}；结局方向=${p.genesis?.ending || "未指定"}
 创世核心卡：${p.genesis?.soulCards ? Object.values(p.genesis.soulCards).join("\n") : "暂无"}
@@ -3923,76 +4689,60 @@ ${generatedText}`;
 }
 
 function compactDraftPrompt(p, c) {
-  const task = c.taskCard || {};
   const relevantMemories = activeMemoriesBeforeChapter(p, c).slice(-12);
   const chapterIndex = p.chapters.findIndex((item) => item.id === c.id) + 1;
   const act = p.volumes.find((volume) => volume.chapterIds.includes(c.id));
   const isFinalizeMode = state.view === "finalize";
-  const outlineText = p.outline
-    ? p.outline.acts.map((item) => `${item.title}：${item.summary}`).join("\n").slice(0, 2600)
-    : "暂无";
-  const scenePlan = c.scenes.length
-    ? c.scenes.map((scene, index) => `${index + 1}.${scene.title}[${scene.beat}/约${scene.targetWords}字]：${scene.summary}`).join("\n").slice(0, 1800)
-    : "暂无，请按任务卡自行规划";
-  const previousChapterSummaries = p.chapters
-    .filter((item) => chapterPosition(p, item.id) < chapterPosition(p, c.id))
-    .slice(-3)
-    .map((item) => `${item.title}：${item.summary || `已写${countText(item.content || "")}字`}`)
-    .join("\n") || "暂无";
-  const requiredCharacters = (task.requiredCharacters || []).join("、");
-  const matchedEntities = p.entities
-    .filter((entity) => requiredCharacters.includes(entity.name) || c.title.includes(entity.name))
-    .slice(0, 12)
-    .map((entity) => `${entity.name}[${entity.type}]：${entity.summary}`)
-    .join("；") || "暂无";
-  return `你是资深中文网文作者。请直接创作当前分集${isFinalizeMode ? "最终定稿" : "完整初稿"}，不要解释过程。
+  const target = Number(state.aiDraftConfig.words) || 1500;
+  const minimum = Math.round(target * .9);
+  const maximum = Math.round(target * 1.1);
+  const previousChapterSummaries = p.chapters.filter((item) => chapterPosition(p,item.id) < chapterPosition(p,c.id)).slice(-3).map((item)=>`${item.title}：${item.summary || `已写${countText(item.content||"")}字`}`).join("\n") || "暂无";
+  const matchedEntities = entitiesForPrompt(p,c).slice(0,12).join("\n") || "暂无";
+  const fineOutline = chapterFineOutline(p,c);
+  const scenePlan = c.scenes.slice(0,4).map((scene,index)=>`${index+1}.${scene.title}[${scene.beat}/张力${scene.tension}/约${scene.targetWords}字]：${scene.summary}`).join("\n") || "暂无";
+  return `你是资深中文网文作者。请直接输出当前章节的${isFinalizeMode ? "最终定稿" : "完整初稿"}，不要解释过程，不要输出标题、大纲或项目符号。
 
-输出要求：
-1. 目标约${state.aiDraftConfig.words}字；为了完整可以自然增加到120%以内。
-2. 开篇直接进入冲突，必须有行动、对话、情绪变化、阶段结果和结尾钩子。
-3. 严格遵守当前分集任务卡、场景蓝图、设定百科、动态记忆、不可修改事实和已选方向，不要擅自跳到后续章节。
-4. 必须出现的人物只使用任务卡里列出的人名；没有明确姓名不要硬造新增人物。
-5. ${isFinalizeMode ? "这是定稿阶段，必须以作者已有初写正文为底稿，修正缺失、逻辑断点、人物状态和设定冲突，保留合理内容并提升完成度。" : "这是初写阶段，大纲负责提供灵感，正文允许后续被作者修改。"}
-6. 禁止输出大纲、分析、项目符号，只输出小说正文。
+字数硬约束：目标${target}字，合格区间${minimum}—${maximum}字（±10%）。必须写到至少${minimum}字，最多不得超过${maximum}字；在区间内自然收束完整场景。
 
 项目：${p.title}
-题材/平台/基调：${(p.genre || []).join("、")} / ${p.platform || "未指定"} / ${p.tone || "未指定"}
-当前阶段：${act?.title || "未分章"}，第${chapterIndex}个写作单元
-当前分集：${c.title}
-AI代写方向：${state.aiDraftConfig.direction}
-额外要求：${state.aiDraftConfig.note || "无"}
+题材/平台/基调：${(p.genre||[]).join("、")} / ${p.platform||"未指定"} / ${p.tone||"未指定"}
+当前阶段：${act?.title||"未分卷"}，第${chapterIndex}章
+当前章节：${c.title}
+写作方向：${state.aiDraftConfig.direction}
+额外要求：${state.aiDraftConfig.note||"无"}
 
-故事大纲摘要：
-${outlineText}
+本书风格规则：
+${styleRulesForPrompt(p,"draft")}
 
 前文摘要：
 ${previousChapterSummaries}
 
-设定百科相关人物/设定：
+设定百科与动态记忆：
 ${matchedEntities}
+${relevantMemories.map((memory)=>`${memory.title}：${memory.content}`).join("；")||"暂无"}
 
-动态记忆：
-${relevantMemories.map((memory) => `${memory.title}：${memory.content}`).join("；") || "暂无"}
+${isFinalizeMode ? `【定稿唯一执行蓝图】
+本章细纲：
+${fineOutline}
 
-本章任务卡：
-目标：${task.goal || "暂无"}
-必须事件：${(task.requiredEvents || []).join("；") || "暂无"}
-必须人物：${requiredCharacters || "暂无"}
-禁止事项：${(task.forbidden || []).join("；") || "暂无"}
-伏笔：${task.foreshadow || "暂无"}
-结尾钩子：${task.hook || "暂无"}
-
-本章分场蓝图：
+四个场景规划（必须严格按1→2→3→4依次写完，不得漏写、合并、调序或新增第五场）：
 ${scenePlan}
 
-${isFinalizeMode ? "作者初写正文" : "已有正文"}：
-${(c.content || "尚未开始").slice(-1800)}`;
+作者现有初稿：
+${(c.content||"暂无").slice(-5000)}
+
+定稿要求：以本章细纲决定事件，以四场景决定正文顺序；校正初稿的逻辑、人物状态和设定冲突。保留与蓝图一致的有效内容，删除偏离细纲的内容。` : `【初稿唯一创作来源：创世四块内容】
+${creationBlocksText(p)}
+
+初稿要求：从上述全书大纲、第一卷大纲、世界法则、核心角色中提取当前章所需内容；遵守前文章节事实，写成可继续修改的小说正文。初稿阶段不读取任务卡，也不读取场景规划。`}`;
 }
 
 function compactContinuationPrompt(p, c, generatedText, remaining) {
   return `请只续写“新增正文”，从已有正文最后一句自然接上。
 当前分集：${c.title}
-目标还缺约${remaining}字。继续保持冲突、行动、对话和结尾钩子。
+目标还缺约${remaining}字。按本书风格规则维持语言与节奏。
+风格规则：
+${styleRulesForPrompt(p, "draft")}
 不要重复前文，不要总结，不要解释。
 
 已有正文末尾：
@@ -4072,7 +4822,7 @@ async function runAI(type) {
     if (type === "draft" && !response.demo) {
       const target = state.aiDraftConfig.words;
       let continuationRound = 0;
-      while (countText(generatedText) < target * 0.95 && continuationRound < 6) {
+      while (countText(generatedText) < target * 0.9 && continuationRound < 6) {
         const remaining = Math.max(300, target - countText(generatedText));
         const continuation = await fetch("/api/generate", {
           method: "POST",
@@ -4086,13 +4836,13 @@ async function runAI(type) {
         generatedText += `\n\n${continuation.content.trim()}`;
         continuationRound += 1;
       }
-      if (countText(generatedText) > target * 1.45) generatedText = trimToWritingLength(generatedText, Math.round(target * 1.25));
+      if (countText(generatedText) > target * 1.1) generatedText = trimToWritingLength(generatedText, Math.round(target * 1.1));
     }
     if (type === "draft") {
       c.content = generatedText;
       c.status = state.view === "finalize" ? "定稿草稿" : "AI初稿";
       c.updatedAt = Date.now();
-      state.aiResult = `${state.view === "finalize" ? "本章定稿草稿" : "本章初稿"}已直接写入编辑器：目标约 ${state.aiDraftConfig.words.toLocaleString()} 字，实际 ${countText(generatedText).toLocaleString()} 字。`;
+      state.aiResult = `${state.view === "finalize" ? "本章定稿草稿" : "本章初稿"}已直接写入编辑器：目标 ${state.aiDraftConfig.words.toLocaleString()} 字（允许 ±10%），合格区间 ${Math.round(state.aiDraftConfig.words*.9).toLocaleString()}—${Math.round(state.aiDraftConfig.words*1.1).toLocaleString()} 字，实际 ${countText(generatedText).toLocaleString()} 字。`;
       runQualityCheck();
       save();
     } else {
@@ -4249,13 +4999,13 @@ function completeInitialDraft() {
   const p = project();
   const c = chapter();
   if (!c?.content.trim()) return toast("本章还没有正文");
-  c.status = "初写完成";
-  c.summary ||= `${c.title}已完成初写，共${countText(c.content)}字。`;
+  c.status = "初稿完成";
+  c.summary ||= `${c.title}已完成初稿，共${countText(c.content)}字。`;
   c.updatedAt = Date.now();
   p.updatedAt = Date.now();
   save();
   render();
-  toast("初写已完成，可以去设定百科/动态记忆调整设定，之后再进入定稿");
+  toast("初稿已完成，可以进入定稿并按细纲与四场景生成最终正文");
 }
 
 function writeChapterFacts(p, c) {
@@ -4586,6 +5336,15 @@ async function generateAllShotImages() {
   } catch (error) { toast(`批量生成中断：${error.message}`); }
   finally { state.busy = false; state.storyboardImageJob = null; render(); }
 }
+
+document.addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k" && project()) {
+    event.preventDefault();
+    action("open-book-search");
+  } else if (event.key === "Escape" && state.modal === "book-search") {
+    action("close-modal");
+  }
+});
 
 render();
 checkAI();

@@ -75,6 +75,7 @@ async function generateWithProvider(payload) {
   };
 
   body.temperature = payload.temperature ?? 0.8;
+  if (Number(payload.maxTokens) > 0) body.max_tokens = Math.min(12000, Number(payload.maxTokens));
 
   const response = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
